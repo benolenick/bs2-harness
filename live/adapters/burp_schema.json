@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BS2 ObservationRecord — the Burp Montoya wire contract",
+  "description": "A Burp extension serializes selected requests/sessions/observations into this shape; the Laboratory ingests them via the burp adapter. Scanners emit hypotheses, never confirmed findings.",
+  "type": "object",
+  "required": ["target", "endpoint", "principal", "map_node", "tool", "kind", "confirmation_status", "confidence"],
+  "properties": {
+    "target": {"type": "string"},
+    "endpoint": {
+      "type": "object",
+      "required": ["id", "method", "route_template"],
+      "properties": {
+        "id": {"type": "string"},
+        "method": {"type": "string"},
+        "route_template": {"type": "string"},
+        "vhost": {"type": "string"}
+      }
+    },
+    "principal": {"type": "string"},
+    "tenant": {"type": "string", "default": ""},
+    "map_node": {"type": "string", "default": "unmapped"},
+    "control_request": {"type": "object", "description": "Header NAMES and body hashes only — never header values"},
+    "modified_request": {"type": "object"},
+    "response_delta": {"type": "object", "description": "The normalized response difference (differential.compare output)"},
+    "dom_diff": {"type": "object"},
+    "tool": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string"},
+        "version": {"type": "string"},
+        "configuration": {"type": "object"}
+      }
+    },
+    "evidence": {"type": "array", "items": {"type": "string"}, "description": "File paths / telemetry refs — never bodies"},
+    "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+    "reproducible": {"type": "boolean"},
+    "state_mutated": {"type": "boolean"},
+    "kind": {"type": "string", "enum": ["observation", "hypothesis", "finding"]},
+    "confirmation_status": {"type": "string", "enum": ["n_a", "unconfirmed", "confirmed", "rejected"]}
+  }
+}

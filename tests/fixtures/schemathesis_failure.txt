@@ -1,0 +1,18 @@
+Schemathesis test session starts
+collected 2 API operations
+
+GET /api/accounts/{id} .F                                             [ 50%]
+POST /api/transfer F                                                  [100%]
+
+________________________ GET /api/accounts/{id} _______________________
+Check failed: response_schema_conformance
+Falsifying example:
+    curl -X GET http://127.0.0.1/api/accounts/2
+
+____________________________ POST /api/transfer _______________________
+FALSIFIED: not_a_server_error
+Falsifying example:
+    curl -X POST http://127.0.0.1/api/transfer -d '{}'
+
+FAILED tests::GET /api/accounts/{id} - response_schema_conformance
+FAILED tests::POST /api/transfer - not_a_server_error

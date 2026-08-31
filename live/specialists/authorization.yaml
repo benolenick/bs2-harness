@@ -1,0 +1,27 @@
+# authorization — BOLA, BOPLA, BFLA and tenant isolation via OWNERSHIP MATRICES.
+# The killer feature: same endpoint × own-vs-foreign object, same operation × normal vs
+# hidden property, same request × browser vs API — executed deterministically, and the
+# specialist reasons only about the structured deltas.
+id: authorization
+title: "Authorization matrix (BOLA / BOPLA / BFLA / tenant isolation)"
+triggers:
+  - object_identifier_present        # a route template with {id} exists in the map
+  - authenticated_endpoint
+requires:
+  - two_distinct_principals          # user-a and user-b registered in the vault
+  - one_owned_object_per_principal   # each owns an object of the endpoint's type
+allowed_adapters:
+  - differential-replay
+  - session-vault
+max_requests: 12
+max_tokens: 8000
+max_minutes: 8
+mutation_policy: read_only
+success_oracle:
+  - foreign_object_returned          # BOLA: foreign object's fields in the response
+  - hidden_prop_effected             # BOPLA: hidden property accepted and reflected
+terminal_states: [confirmed, rejected, inconclusive, blocked, not_applicable]
+wake_again_on:
+  - new_object_type
+  - new_role
+  - new_endpoint

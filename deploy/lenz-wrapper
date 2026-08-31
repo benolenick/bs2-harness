@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 /usr/local/libexec/lenz-reader "$@"

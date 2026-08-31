@@ -1,0 +1,35 @@
+[Unit]
+Description=Lenz signed fail-closed BS2 telemetry projector
+After=local-fs.target
+
+[Service]
+Type=simple
+User=lenz
+Group=lenz
+ExecStart=/usr/bin/python3 /usr/local/libexec/lenz-projector --interval 2
+Restart=always
+RestartSec=2
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/tmp/claude-1000/-home-om /etc/lenz /usr/local/libexec/lenz-projector
+ReadWritePaths=/opt/bs2/run/lenz
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

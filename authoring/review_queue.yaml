@@ -1,0 +1,454 @@
+- id: ftp-banner-version-scan
+  name: Identify FTP Product and Version
+  phase: recon
+  tier: floor
+  autonomy: full
+  when:
+  - service: ftp
+  - port: 21
+  tool: nmap
+  invocation: nmap -Pn -sV -p {{port}} --version-all {{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit code is 0 and stdout identifies port {{port}} as open FTP with
+      a product or version banner
+    emits:
+    - vuln_present/2
+  cost_hint: cheap
+  notes: Banner detection is low-noise but may expose the scanner address in service
+    logs.
+  _family: ftp
+- id: ftp-credential-pair-bruteforce
+  name: Brute-Force FTP User and Password Lists
+  phase: cred
+  tier: heavy
+  autonomy: manual
+  when:
+  - service: ftp
+  - port: 21
+  tool: hydra
+  invocation: hydra -I -f -L {{userlist}} -P {{wordlist}} -s {{port}} -t {{threads}}
+    -W {{wait}} {{host}} ftp
+  parallel_safe: false
+  blast_radius: high
+  operator: ''
+  confirms: []
+  verify:
+    success_if: stdout reports at least one successful FTP host-login-password result
+      and the result is not marked as a connection error
+    emits:
+    - have_cred/1
+    - cred_grants/2
+  cost_hint: slow
+  notes: Broad credential guessing is noisy and should use conservative concurrency
+    and lockout-aware lists.
+  _family: ftp
+- id: smtp-vrfy-user-enum
+  name: Enumerate SMTP Users with VRFY
+  phase: enum
+  tier: standard
+  autonomy: full
+  when:
+  - service: smtp
+  - port: 25
+  tool: smtp-user-enum
+  invocation: smtp-user-enum -M VRFY -U {{wordlist}} -t {{host}} -p {{port}}
+  parallel_safe: false
+  blast_radius: low
+  operator: ''
+  confirms: []
+  verify:
+    success_if: Stdout identifies at least one username with an affirmative 250 or
+      251 VRFY response rather than an unknown-user response.
+    emits:
+    - account/2
+  cost_hint: moderate
+  notes: Repeated VRFY requests are conspicuous and may trigger throttling or lockout
+    controls.
+  _family: smtp
+- id: smtp-open-relay-swaks
+  name: Verify SMTP Relay End to End
+  phase: enum
+  tier: standard
+  autonomy: manual
+  when:
+  - service: smtp
+  - port: 25
+  tool: swaks
+  invocation: swaks --server {{host}} --port {{port}} --from {{sender}} --to {{recipient}}
+    --quit-after DATA
+  parallel_safe: false
+  blast_radius: low
+  operator: ''
+  confirms: []
+  verify:
+    success_if: Stdout shows successful MAIL FROM, RCPT TO, and DATA-stage acceptance
+      for an unauthorized external relay path, with optional out-of-band confirmation
+      at {{recipient}}.
+    emits: []
+  cost_hint: cheap
+  notes: Keep both addresses controlled and stop after DATA unless delivery confirmation
+    is explicitly required.
+  _family: smtp
+- id: dns-axfr-dig
+  name: DNS AXFR Zone Transfer with dig
+  phase: enum
+  tier: floor
+  autonomy: full
+  when:
+  - service: dns
+  - port: 53
+  tool: dig
+  invocation: dig @{{host}} -p {{port}} {{domain}} AXFR +tcp +noall +answer
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit code is 0 and stdout contains SOA plus multiple zone records
+      and does not contain 'Transfer failed'
+    emits: []
+  cost_hint: cheap
+  notes: A single AXFR request is conspicuous but low-volume.
+  _family: dns
+- id: dns-axfr-dnsrecon
+  name: DNS Multi-Nameserver AXFR Enumeration
+  phase: enum
+  tier: standard
+  autonomy: full
+  when:
+  - service: dns
+  - port: 53
+  tool: dnsrecon
+  invocation: dnsrecon -d {{domain}} -n {{host}} -t axfr
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit code is 0 and stdout reports a successful zone transfer with
+      returned DNS records
+    emits: []
+  cost_hint: cheap
+  notes: May query several authoritative nameservers discovered for the zone.
+  _family: dns
+- id: dns-bruteforce-gobuster
+  name: DNS Subdomain Brute-Force with Gobuster
+  phase: enum
+  tier: standard
+  autonomy: full
+  when:
+  - service: dns
+  - port: 53
+  tool: gobuster
+  invocation: gobuster dns -d {{domain}} -r {{host}}:{{port}} -w {{wordlist}} --timeout
+    {{timeout}}
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit code is 0 and stdout contains one or more 'Found:' results that
+      resolve beneath the target domain
+    emits: []
+  cost_hint: moderate
+  notes: Tune concurrency and timeout to avoid excessive resolver load.
+  _family: dns
+- id: dns-bruteforce-massdns
+  name: High-Volume DNS Candidate Resolution
+  phase: enum
+  tier: heavy
+  autonomy: semi
+  when:
+  - service: dns
+  - port: 53
+  tool: massdns
+  invocation: massdns -r {{resolver_list}} -t A -o S -w {{output}} {{candidate_list}}
+  parallel_safe: false
+  blast_radius: high
+  operator: ''
+  confirms: []
+  verify:
+    success_if: exit code is 0 and the output contains at least one NOERROR A-record
+      response for a candidate beneath the target domain
+    emits: []
+  cost_hint: slow
+  notes: High-rate resolution can burden resolvers and trigger monitoring; throttle
+    externally.
+  _family: dns
+- id: dovecot-network-cve-lead
+  name: Probe Dovecot for Version-Matched CVE Leads
+  phase: recon
+  tier: standard
+  autonomy: semi
+  when:
+  - service: dovecot
+  tool: nmap
+  invocation: nmap -Pn -sV -p {{port}} --script vulners --script-args mincvss={{min_cvss}}
+    {{host}}
+  parallel_safe: true
+  blast_radius: low
+  operator: run-public-exploit
+  confirms: []
+  verify:
+    success_if: exit code is 0 and stdout identifies Dovecot with a version plus at
+      least one version-correlated CVE reference
+    emits:
+    - vuln_present/2
+    - known_exploit/2
+  cost_hint: moderate
+  notes: 'Lead only: version correlation is not proof of exploitability and requires
+    manual validation.'
+  _family: pop3imap
+- id: ftp-anonymous-root-listing
+  name: List FTP Root as Anonymous
+  phase: enum
+  tier: standard
+  autonomy: full
+  when:
+  - service: ftp
+  - port: 21
+  tool: curl
+  invocation: curl --fail --silent --show-error --user 'anonymous:{{anonymous_password}}'
+    --list-only 'ftp://{{host}}:{{port}}/'
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - session/2
+  verify:
+    success_if: exit code is 0 and stdout contains a valid directory listing or an
+      empty-listing success response
+    emits:
+    - session/2
+  cost_hint: cheap
+  notes: Listing is read-only, but the anonymous identity and source address are normally
+    logged.
+  _family: ftp
+- id: ftp-anonymous-recursive-enum
+  name: Recursively Enumerate Anonymous FTP
+  phase: enum
+  tier: standard
+  autonomy: semi
+  when:
+  - service: ftp
+  - port: 21
+  tool: lftp
+  invocation: lftp -u 'anonymous,{{anonymous_password}}' -p {{port}} {{host}} -e 'cls
+    -1R {{remote_dir}}; quit'
+  parallel_safe: true
+  blast_radius: low
+  operator: ''
+  confirms:
+  - session/2
+  verify:
+    success_if: exit code is 0 and stdout contains recursive listing output without
+      an FTP authentication or permission error
+    emits:
+    - session/2
+  cost_hint: moderate
+  notes: Recursive traversal can be conspicuous and expensive on large directory trees.
+  _family: ftp
+- id: ftp-credential-audit-ncrack
+  name: Audit FTP Credentials with Ncrack
+  phase: cred
+  tier: heavy
+  autonomy: manual
+  when:
+  - service: ftp
+  - port: 21
+  tool: ncrack
+  invocation: ncrack -p {{port}} --user {{user}} -P {{wordlist}} -T {{timing}} ftp://{{host}}
+  parallel_safe: false
+  blast_radius: high
+  operator: ''
+  confirms:
+  - account/2
+  verify:
+    success_if: stdout lists a discovered credential under successful credentials
+      for the FTP service
+    emits:
+    - have_cred/1
+    - cred_grants/2
+  cost_hint: slow
+  notes: Ncrack may open many connections; tune timing to prevent lockouts or service
+    degradation.
+  _family: ftp
+- id: vsftpd-version-exploit-lead
+  name: Map a vsftpd Version to Public Exploit Leads
+  phase: recon
+  tier: standard
+  autonomy: semi
+  when:
+  - service: ftp
+  - product: vsftpd
+  tool: searchsploit
+  invocation: searchsploit --colour false --exclude='DoS' 'vsftpd {{version}}'
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - vuln_present/2
+  verify:
+    success_if: exit code is 0 and stdout contains at least one exploit title with
+      an EDB identifier or CVE mapping applicable to the supplied version
+    emits:
+    - known_exploit/2
+  cost_hint: cheap
+  notes: This is a lead only; validate exact version, build provenance, and exploit
+    prerequisites before use.
+  _family: ftp
+- id: vsftpd-backdoor-cve-lead-check
+  name: Check for the vsftpd Backdoor Exposure
+  phase: recon
+  tier: standard
+  autonomy: semi
+  when:
+  - service: ftp
+  - product: vsftpd
+  tool: nmap
+  invocation: nmap -Pn -p {{port}} --script ftp-vsftpd-backdoor {{host}}
+  parallel_safe: false
+  blast_radius: low
+  operator: ''
+  confirms:
+  - vuln_present/2
+  verify:
+    success_if: exit code is 0 and script output explicitly reports the tested vsftpd
+      backdoor vulnerability as VULNERABLE
+    emits:
+    - vuln_present/2
+    - known_exploit/2
+  cost_hint: moderate
+  notes: This is a CVE lead check that may trigger backdoor-specific behavior; confirm
+    authorization before firing.
+  _family: ftp
+- id: postfix-nmap-vulners-lead
+  name: Correlate Postfix Fingerprint with CVE Leads
+  phase: recon
+  tier: standard
+  autonomy: full
+  when:
+  - service: smtp
+  - product: postfix
+  - port: 25
+  tool: nmap
+  invocation: nmap -Pn -sV --version-all -p {{port}} --script vulners {{host}}
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - vuln_present/2
+  verify:
+    success_if: Exit code is 0 and stdout associates the detected Postfix product
+      and version with at least one CVE or public exploit identifier.
+    emits:
+    - known_exploit/2
+  cost_hint: moderate
+  notes: Lead only; banner-based CVE correlation can produce false positives when
+    vendors backport patches.
+  _family: smtp
+- id: postfix-public-exploit-run
+  name: Run a Validated Public Postfix Exploit
+  phase: exploit
+  tier: heavy
+  autonomy: manual
+  when:
+  - service: smtp
+  - product: postfix
+  - port: 25
+  tool: msfconsole
+  invocation: msfconsole -q -x "use {{module}}; set RHOSTS {{host}}; set RPORT {{port}};
+    run; exit"
+  parallel_safe: false
+  blast_radius: high
+  operator: run-public-exploit
+  confirms:
+  - vuln_present/2
+  - known_exploit/2
+  - runs_as/2
+  verify:
+    success_if: Stdout reports a successfully opened command or Meterpreter session,
+      or the configured out-of-band callback records execution from {{host}}.
+    emits:
+    - rce_as/1
+  cost_hint: slow
+  notes: Run only after exact-version and prerequisite validation because SMTP exploits
+    may crash or disrupt mail service.
+  _family: smtp
+- id: dns-version-cve-lead
+  name: DNS Product Version to Public Exploit Lead
+  phase: exploit
+  tier: standard
+  autonomy: semi
+  when:
+  - service: dns
+  - port: 53
+  tool: searchsploit
+  invocation: searchsploit --json "{{product}} {{version}}"
+  parallel_safe: true
+  blast_radius: none
+  operator: ''
+  confirms:
+  - vuln_present/2
+  verify:
+    success_if: exit code is 0 and parsed JSON contains at least one exploit entry
+      whose affected product and version range match the discovered DNS service
+    emits:
+    - known_exploit/2
+  cost_hint: cheap
+  notes: 'Lead only: validate applicability and safety before selecting any public
+    exploit.'
+  _family: dns
+- id: pop3-harvested-credential-reuse
+  name: Validate Harvested Credential on POP3
+  phase: cred
+  tier: standard
+  autonomy: semi
+  when:
+  - service: pop3
+  - port: 110
+  tool: curl
+  invocation: curl --fail --silent --show-error --user '{{user}}:{{password}}' --url
+    'pop3://{{host}}:{{port}}/'
+  parallel_safe: true
+  blast_radius: low
+  operator: cred-to-session
+  confirms:
+  - have_cred/1
+  verify:
+    success_if: exit code is 0 and stdout returns a mailbox listing without an authentication
+      failure
+    emits:
+    - cred_grants/2
+    - session/2
+  cost_hint: cheap
+  notes: Perform one validation attempt per harvested credential to minimize lockout
+    and audit noise.
+  _family: pop3imap
+- id: dovecot-version-public-exploit-lead
+  name: Map Dovecot Version to Public Exploit Leads
+  phase: recon
+  tier: standard
+  autonomy: semi
+  when:
+  - service: dovecot
+  tool: searchsploit
+  invocation: searchsploit --colour Dovecot {{version}}
+  parallel_safe: true
+  blast_radius: none
+  operator: run-public-exploit
+  confirms:
+  - vuln_present/2
+  verify:
+    success_if: exit code is 0 and stdout contains at least one Dovecot exploit entry
+      with a CVE or Exploit-DB identifier
+    emits:
+    - known_exploit/2
+  cost_hint: moderate
+  notes: 'Lead only: validate the exact version, configuration, and exploit prerequisites
+    before use.'
+  _family: pop3imap

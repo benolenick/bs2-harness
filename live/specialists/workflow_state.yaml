@@ -1,0 +1,30 @@
+# workflow-state — business-logic invariants over inferred state machines
+# (registration → enrollment → MFA → active; draft → approval → execution → settlement).
+# Invariants tested: skip-state, stale-token reuse, replay-after-approval,
+# self-approval, cancel-races-execution, client-trusted limits.
+id: workflow-state
+title: "Workflow/state (business logic, replay, concurrency, approvals)"
+triggers:
+  - workflow_present                 # the app model holds at least one workflow
+  - state_changing_endpoint
+requires:
+  - workflow_transition              # at least one transition to test
+  - repeatable_control               # a control request that can be replayed safely
+allowed_adapters:
+  - differential-replay
+  - workflow-map
+max_requests: 10
+max_tokens: 8000
+max_minutes: 8
+mutation_policy: read_only            # workflow tests are read-only by default:
+                                      # mutating concurrency tests need write approval
+success_oracle:
+  - state_skipped
+  - stale_token_accepted
+  - self_approval_succeeded
+  - replay_accepted
+terminal_states: [confirmed, rejected, inconclusive, blocked, not_applicable]
+wake_again_on:
+  - new_workflow
+  - new_transition
+  - new_state_changing_endpoint

@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export BS2_BROKER_STATE="${BS2_BROKER_STATE:-$HOME/.local/state/bs2-broker}"
-export BS2_BROKER_PORT="${BS2_BROKER_PORT:-8129}"
-exec python3 "$HERE/broker/bs2_cli_broker.py" "$@"

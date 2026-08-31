@@ -1,0 +1,9 @@
+export GB_TARGET_ONLY=1
+export TROOPER_BASE=http://127.0.0.1:8000/v1
+export TROOPER_MODEL=qwen3-14b
+export GB_CHISEL=/opt/bs2/bin/chisel
+export GB_GPU_HOST=local
+export CUDA_VISIBLE_DEVICES=1
+export GB_KNOWLEDGE=1
+export GB_ARIADNE=http://127.0.0.1:8112
+unset TROOPER_EXEC_SSH

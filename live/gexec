@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# gexec — run ONE on-target command THROUGH the BS2 governed seam.
+# The sighted attacker (you, or a claude-pentest agent) calls this INSTEAD of raw bash
+# for anything that touches the target. Raw output returns to you (you are the operator);
+# the action is recorded as governed capability/tool.dispatched/tool.completed events,
+# raw stays dirty-side by content hash, and the default-deny gate can refuse it.
+#   env  BS2_SEAM_RUN=<run-dir from `governed_seam.py open`>
+#        GEXEC_CLASS=web.recon | web.exploit | host.access   (default web.exploit)
+set -uo pipefail
+: "${BS2_SEAM_RUN:?set BS2_SEAM_RUN to the seam run-dir (from governed_seam.py open)}"
+exec python3 /opt/bs2/live/governed_seam.py exec \
+  --run-dir "$BS2_SEAM_RUN" --class "${GEXEC_CLASS:-web.exploit}" -- "$@"

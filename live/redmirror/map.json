@@ -1,0 +1,13 @@
+{"hosts":[{"ip":"192.0.2.10","is_dc":false,"services":["ftp","ssh","smtp","dns","http","pop3","imap","rpcbind","dovecot"],"ports":[
+{"port":21,"name":"ftp","product":"vsftpd 3.0.5"},
+{"port":22,"name":"ssh","product":"OpenSSH 8.2p1"},
+{"port":25,"name":"smtp","product":"Postfix smtpd"},
+{"port":53,"name":"dns","product":"1337_HTB_DNS"},
+{"port":80,"name":"http","product":"Apache httpd 2.4.41"},
+{"port":110,"name":"pop3","product":"Dovecot pop3d"},
+{"port":111,"name":"rpcbind","product":"rpcbind 2-4"},
+{"port":143,"name":"imap","product":"Dovecot imapd"},
+{"port":993,"name":"imaps","product":"Dovecot imapd"},
+{"port":995,"name":"pop3s","product":"Dovecot pop3d"},
+{"port":8080,"name":"http","product":"Apache httpd 2.4.41"}
+]}],"creds":[]}

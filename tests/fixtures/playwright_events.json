@@ -1,0 +1,16 @@
+[
+  {
+    "url": "http://127.0.0.1/api/accounts/2",
+    "method": "GET",
+    "status": 200,
+    "principal": "user:user-1",
+    "context": "isolated-user-a"
+  },
+  {
+    "url": "http://127.0.0.1/api/transfer",
+    "method": "POST",
+    "status": 200,
+    "principal": "user:user-1",
+    "context": "isolated-user-a"
+  }
+]

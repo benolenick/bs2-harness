@@ -1,0 +1,12 @@
+#!/bin/bash
+# Structural guard for the ungoverned claude-cli trooper: any `find` it runs is forced to
+# stay on the current filesystem (-xdev => never descends into the slow /mnt NTFS/FUSE mounts)
+# and is hard-timeboxed. This makes a `find /` physically incapable of the 40-min hang,
+# regardless of whether the model obeys the prompt rule. Real find is at /usr/bin/find.
+args=("$@")
+has_root=0
+for a in "$@"; do case "$a" in /|/mnt|/mnt/*) has_root=1;; esac; done
+# inject -xdev right after the last path operand isn't trivial; simplest: prepend -xdev works
+# because find accepts global options before expressions when placed after paths. We pass it
+# as the first option token by rebuilding: paths first are preserved by real find ordering.
+exec timeout 25 /usr/bin/find "$@" -xdev 2>/dev/null

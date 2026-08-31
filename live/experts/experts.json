@@ -1,0 +1,56 @@
+{
+  "_master": {
+    "armed": false,
+    "total_minutes_cap": 120,
+    "parallel": 1,
+    "default_model": "claude-sonnet-5",
+    "level": 3,
+    "parallel_allowed": true,
+    "memoria": false,
+    "risk": "safe"
+  },
+  "experts": {
+    "sqli": {
+      "enabled": true,
+      "model": "",
+      "minutes": 12,
+      "max_turns": 250
+    },
+    "nosqli": {
+      "enabled": true,
+      "model": "",
+      "minutes": 12,
+      "max_turns": 250
+    },
+    "broken-access-control": {
+      "enabled": true,
+      "model": "",
+      "minutes": 12,
+      "max_turns": 250
+    },
+    "auth-bypass": {
+      "enabled": true,
+      "model": "",
+      "minutes": 12,
+      "max_turns": 250
+    },
+    "path-traversal": {
+      "enabled": true,
+      "model": "",
+      "minutes": 12,
+      "max_turns": 250
+    },
+    "xss": {
+      "enabled": true,
+      "model": "",
+      "minutes": 12,
+      "max_turns": 250
+    },
+    "llm-injection": {
+      "enabled": true,
+      "model": "",
+      "minutes": 12,
+      "max_turns": 250
+    }
+  }
+}

@@ -1,0 +1,2 @@
+#!/bin/bash
+echo "[locate disabled on this host — use command -v <tool>]" >&2; exit 1

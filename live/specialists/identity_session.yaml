@@ -1,0 +1,25 @@
+# identity-session — login, MFA, recovery, session lifecycle, JWT and OAuth/OIDC.
+# Systematic session matrices: same token × valid/expired/wrong-audience/wrong-tenant,
+# same request × mfa-complete vs mfa-incomplete session.
+id: identity-session
+title: "Identity/session (login, MFA, recovery, session lifecycle, JWT/OAuth)"
+triggers:
+  - authenticated_endpoint
+  - session_boundary_observed        # cookies/tokens seen in the map
+requires:
+  - two_session_states               # e.g. mfa_complete and mfa_partial sessions exist
+allowed_adapters:
+  - differential-replay
+  - session-vault
+max_requests: 10
+max_tokens: 8000
+max_minutes: 8
+mutation_policy: read_only
+success_oracle:
+  - session_acceptance_mismatch      # a request accepted/rejected across session states
+  - stale_token_accepted
+terminal_states: [confirmed, rejected, inconclusive, blocked, not_applicable]
+wake_again_on:
+  - new_session_state
+  - new_token_type
+  - new_endpoint

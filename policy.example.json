@@ -1,11 +1,7 @@
 {
-  "schema_version": 1,
-  "revision": 1,
-  "network_mode": "scope_only",
-  "allowed_hosts": ["10.129.0.0/16"],
-  "require_per_command_approval": true,
-  "command_approval_timeout_seconds": 300,
-  "deny_delete": true,
-  "max_actions_per_host": 100000,
-  "budget_window_seconds": 3600
+  "mode": "scope_only",
+  "allowed_hosts": ["198.51.100.0/24", "10.10.10.0/24"],
+  "deny_destructive": true,
+  "require_approval": true,
+  "budget": { "max_commands": 500 }
 }

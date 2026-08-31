@@ -1,100 +1,73 @@
-# BS2 — Governed, Human-Gated Pentest Harness
+# BS2 — a governed, model-agnostic pentest engine
 
-An autonomous penetration-testing engine where **every command that touches a
-target passes through a governed door and waits for a human's approval.** It runs
-headless (backend only, no web UI) and is model-agnostic: the "trooper" that
-authors and runs on-target commands can be a local LLM, a hosted API, or anything
-that speaks the OpenAI chat format.
+BS2 is an autonomous penetration-testing engine built around one non-negotiable
+idea: **every command that touches a target passes through a single governed door,
+and the human operator can approve or deny each one from the command line.**
 
-Think of it as an autonomous recon→exploit loop with a hard **human-in-the-loop
-gate on every packet**.
+It is model-agnostic. A capable frontier model (the "manager") authors each command
+from a live map of the target; a cheap local model (the "trooper") executes it on the
+box. The manager never touches the target directly — it reasons, the trooper triggers,
+and the governed door decides whether the trigger fires.
 
-## Why this exists
+## Why it's built this way
 
-Autonomous pentest agents are capable but hard to trust: they will happily fire
-whatever they decide next. BS2 keeps the autonomy but puts a deterministic,
-fail-closed gate in front of the one thing that matters — contact with the target:
+- **Governance is the product.** `live/target_exec.py` is the *only* path to the
+  target. Order of gates, all fail-closed: destructive-command block → scope/allowlist
+  guard → per-command operator approval → budget → execute. Nothing reaches a box
+  around it.
+- **Human-in-the-loop, per command.** The broker (`live/broker/`) pauses every
+  box-touching command and waits for a decision. Approve interactively at a TTY
+  (`bs2-gate`), scriptably (`bs2-approve allow/deny <id>`), or under an unattended
+  policy (`servicer.py`). You see exactly what MIT-style harnesses show — the command,
+  the target, the action class — and you say yes or no.
+- **Model-agnostic executor.** Point the trooper at any OpenAI-compatible endpoint or
+  a local CLI (`TROOPER_BASE` / `TROOPER_MODEL` / `TROOPER_KEY_FILE`). The intelligence
+  lives in the manager's reasoning each step, never in frozen if-vuln-shape branches.
 
-- **Every** target-touching command is intercepted at a single door (`target_exec.py`).
-- The door enforces, in order: a destructive-command block, a scope/allowlist check,
-  then a **per-command operator approval** — then, and only then, execution.
-- Deny, timeout, a missing approver, or any error all **fail closed** (no execution).
-- The operator sees the exact command, resolved IPs, and action class for each one.
+## What's in here
 
-## Architecture
+| Component | Path | Role |
+|---|---|---|
+| Governed door | `live/target_exec.py` | the single gated path to any target |
+| Approval broker | `live/broker/` | HITL gate: interactive, scriptable, or policy |
+| Trooper | `live/trooper.py` | on-target executor (any model) |
+| Manager | `manager/`, `live/autocannon.py` | authors commands from the live map |
+| Cartographer / hands | `live/` | autonomous recon — builds the map itself |
+| Catalog | `catalog/deck_final.yaml` | attack-recipe library (a library, never the decider) |
+| Scorer | `scorer/` | grounded verification of results |
+| Tests | `tests/` | governance + scorer integrity suites |
 
-```
- manager (autocannon.py)      authors lanes/objectives, drives the engagement
-        │
-        ▼
- trooper (trooper.py)         an LLM as the on-target hands (ReAct, one bash block/turn)
-        │  + recipes.py       deterministic recon/exploit lanes (no LLM needed)
-        ▼
- governed door (target_exec.py)   THE single target-contact primitive
-        │   1. destructive-command block   2. scope/allowlist   3. operator approval
-        ▼
- approval broker (broker/)    holds each command until a human decides
-        │
-        ▼
- operator                     approves/denies each command (bin/bs2-gate)
-```
+## Deliberately NOT included
 
-Nothing reaches the target except through `target_exec.run()`, and nothing runs
-there without passing the broker.
+- **No exploit corpus / cheat-sheet library.** A capable frontier model already knows
+  the exploits — bundling a static playbook adds megabytes and no capability.
+- **No frontend.** This is the backend engine only.
+- **No secrets, no engagement transcripts.** Bring your own keys and scope.
 
 ## Quickstart
 
 ```bash
-# 1. Define scope (only these hosts may ever be contacted)
-cp policy.example.json policy.json     # edit allowed_hosts to your target
-export BS2_GOVERNANCE_POLICY="$PWD/policy.json"
-export BS2_TARGET="10.129.42.10"       # your authorized engagement target
+# 1. point the trooper at a model (any OpenAI-compatible endpoint)
+export TROOPER_BASE=https://api.your-provider.com/v1
+export TROOPER_MODEL=your-model
+export TROOPER_KEY_FILE=~/.config/bs2/trooper.key
 
-# 2. Start the approval broker (terminal 1)
-export BS2_GOVERNANCE_BROKER_URL="http://127.0.0.1:8129"
-bin/bs2-broker
+# 2. start the operator approval gate in a terminal (interactive HITL)
+python3 live/broker/bs2_cli_broker.py &     # the broker
+python3 live/broker/bs2_gate.py             # the TTY approver — y/n on every command
 
-# 3. Sit at the gate — you approve every command here (terminal 2)
-export BS2_GOVERNANCE_BROKER_TOKEN="$(cat ~/.local/state/bs2-broker/token)"
-bin/bs2-gate
-
-# 4. Point the trooper at a model and run the engine (terminal 3)
-export BS2_GOVERNANCE_BROKER_TOKEN="$(cat ~/.local/state/bs2-broker/token)"
-export TROOPER_BASE="http://127.0.0.1:8000/v1"   # any OpenAI-compatible endpoint
-export TROOPER_MODEL="your-model"
-python3 autocannon.py --target "$BS2_TARGET"
+# 3. run the manager against a scoped target
+python3 live/autocannon.py --target 198.51.100.10
 ```
 
-Every command the engine wants to run against the target now appears at your
-`bs2-gate` prompt. Press `y` to approve, `n` to deny — one key per command.
-
-## Human-in-the-loop modes
-
-- **`bin/bs2-gate`** (default): interactive. Each target-touching command blocks
-  showing the exact command + context; you approve/deny each. `a` = approve the
-  rest of the session, `q` = deny and close the gate.
-- **`bin/bs2-approve list|allow|deny <id>`**: scriptable decisions.
-- **`broker/servicer.py`**: an unattended policy that auto-approves in-scope,
-  non-destructive commands and holds anything suspicious — for CI/lab runs only.
-
-## Trooper backends (pluggable)
-
-Any OpenAI-compatible chat endpoint works. Set `TROOPER_BASE` / `TROOPER_MODEL`
-(and `TROOPER_KEY_FILE` for hosted APIs). A **local** model is recommended for the
-on-target executor: it keeps target content off third-party services, and some
-hosted models' safety systems will refuse live-target security content.
-
-## Safety model
-
-- Single target-contact primitive; a destructive-command guard that is always on.
-- Scope is re-checked at command time against an allowlist (`deny` / `loopback_only`
-  / `scope_only`); an out-of-scope host embedded in a command is rejected.
-- Per-command approval token is payload-bound, single-use, and time-limited.
-- Runtime policy/state live under `~/.local/state` (0700/0600) and fail closed on
-  unsafe permissions. An append-only audit line is written per target command.
+Scope lives in a policy file (see `policy.example.json`): set `mode` and
+`allowed_hosts`. Anything outside scope is denied at the door, before approval.
 
 ## Authorized use only
 
-For authorized security testing, CTFs, and lab/training targets you own or have
-explicit written permission to test. You are responsible for staying in scope and
-in compliance with the law. No warranty; see LICENSE.
+BS2 is for **authorized** security testing — engagements you have written permission
+to run, CTFs, and lab targets you own. The governed door and per-command approval exist
+so a human stays accountable for every action. Don't point it at anything you aren't
+allowed to test.
+
+MIT-licensed. Copyright (c) 2026 Ben Olenick.
