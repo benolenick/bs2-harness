@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+run/
+state/
+*.token
+*.ds_key
+*.key
+.env
+.env.*
+raw/
+*.jar
