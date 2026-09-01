@@ -1,7 +1,7 @@
 {
-  "mode": "scope_only",
+  "network_mode": "scope_only",
   "allowed_hosts": ["198.51.100.0/24", "10.10.10.0/24"],
-  "deny_destructive": true,
-  "require_approval": true,
-  "budget": { "max_commands": 500 }
+  "max_actions_per_host": 500,
+  "budget_window_seconds": 3600,
+  "command_approval_timeout_seconds": 300
 }

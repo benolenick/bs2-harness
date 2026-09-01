@@ -62,12 +62,12 @@ python3 live/broker/bs2_gate.py             # the TTY approver — y/n on every 
 # 3. (optional) start the Ariadne attack-path planner for path ranking
 bash scripts/start_ariadne.sh &             # serves :8112; advisory, safe to omit
 
-# 4. run the manager against a scoped target
+# 4. tell the recipe lanes which host is in scope, then run the manager
+export BS2_TARGET=198.51.100.10   # recipe-driven lanes gate on this; unset => "outside scope"
 python3 live/autocannon.py --target 198.51.100.10
 ```
 
-Scope lives in a policy file (see `policy.example.json`): set `mode` and
-`allowed_hosts`. Anything outside scope is denied at the door, before approval.
+Scope lives in a policy file (see `policy.example.json`): set `network_mode` and `allowed_hosts`. Anything outside scope is denied at the door, before approval.
 
 ## Authorized use only
 

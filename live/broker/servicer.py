@@ -5,6 +5,9 @@ command naming a non-target IP or matching an exfil pattern for manual review.""
 import os, json, time, re, sys
 STATE=os.path.expanduser("~/.local/state/bs2-broker")
 PEND=os.path.join(STATE,"pending"); DEC=os.path.join(STATE,"decisions")
+os.makedirs(PEND, exist_ok=True); os.makedirs(DEC, exist_ok=True)  # tolerate starting before the broker
+try: os.chmod(STATE, 0o700)
+except OSError: pass
 TARGET="198.51.100.10"
 IP=re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b")
 # exfil = pushing data OUT to a non-target host; a /dev/tcp or nc TO the target is a read/banner-grab
