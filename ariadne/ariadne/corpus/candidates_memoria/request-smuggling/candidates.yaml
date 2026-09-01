@@ -1,0 +1,121 @@
+operators:
+- name: http-smuggling-read
+  desc: Exploit HTTP request smuggling to read arbitrary files by bypassing frontend/backend
+    parsing differences.
+  cost: 3
+  tags:
+  - web
+  - file-read
+  refs:
+  - CWE-770
+  - OWASP-A03
+  pre:
+  - - endpoint
+    - ?e
+  - - smuggling_vuln
+    - ?e
+  - - runs_as
+    - ?e
+    - ?u
+  - - can_read
+    - ?u
+    - ?file
+  post:
+  - - read_file
+    - ?file
+  source: memoria:request-smuggling:rel0.92
+  connects: true
+  new_preds_used:
+  - smuggling_vuln
+- name: http-smuggling-rce
+  desc: Exploit HTTP request smuggling to achieve remote code execution by bypassing
+    frontend/backend parsing differences.
+  cost: 4
+  tags:
+  - web
+  - rce
+  refs:
+  - CWE-770
+  - OWASP-A03
+  pre:
+  - - endpoint
+    - ?e
+  - - smuggling_vuln
+    - ?e
+  - - runs_as
+    - ?e
+    - ?u
+  post:
+  - - rce_as
+    - ?u
+  source: memoria:request-smuggling:rel0.92
+  connects: true
+  new_preds_used:
+  - smuggling_vuln
+- name: http-smuggling-bypass
+  desc: Exploit HTTP request smuggling to bypass authentication and gain a higher
+    role session.
+  cost: 3
+  tags:
+  - web
+  - auth-bypass
+  refs:
+  - CWE-668
+  pre:
+  - - vuln_present
+    - ?e
+    - http_smuggling
+  - - endpoint
+    - ?e
+  post:
+  - - session
+    - attacker
+    - admin
+  source: memoria:request-smuggling:rel0.92
+  connects: true
+  new_preds_used: []
+- name: te-cl-smuggling
+  desc: Exploit TE/CL header mismatch to smuggle requests through misconfigured proxy
+    chain
+  cost: 3
+  tags:
+  - web
+  - smuggling
+  refs:
+  - CWE-597
+  - OWASP-A06
+  pre:
+  - - endpoint
+    - ?e
+  - - te_cl_misconfigured
+    - ?e
+  post:
+  - - smuggle_possible
+    - ?e
+  source: memoria:request-smuggling:rel0.90
+  connects: true
+  new_preds_used:
+  - smuggle_possible
+  - te_cl_misconfigured
+- name: smuggle-bypass-auth
+  desc: Use smuggled request to bypass authentication by injecting admin credentials
+  cost: 4
+  tags:
+  - web
+  - auth-bypass
+  refs:
+  - CWE-287
+  pre:
+  - - smuggle_possible
+    - ?e
+  - - endpoint
+    - ?e
+  - - accepts_role_field
+    - ?e
+  post:
+  - - rce_as
+    - admin
+  source: memoria:request-smuggling:rel0.90
+  connects: true
+  new_preds_used:
+  - smuggle_possible

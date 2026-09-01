@@ -11,13 +11,14 @@ box that runs them. Loopback-only lab; no cloud services needed.
 ## 2. Python packages
 
 ```bash
-pip install cryptography playwright requests
+pip install cryptography playwright requests pyyaml
 playwright install chromium          # downloads the browser the adapters drive
 ```
 
 - `cryptography` — Lenz terminal-projection signing (ed25519), REQUIRED
 - `playwright` — the browser adapters (registry probes + future browser lanes)
 - `requests` — used by the playwright ecosystem; cheap insurance
+- `pyyaml` — the Ariadne planner (`ariadne/`) loads its operator corpus from YAML
 
 Everything else the runtime imports is stdlib. The reference scorer
 (`scorer/crapi_score.py`) is stdlib-only (urllib).

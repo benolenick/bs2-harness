@@ -1,0 +1,8 @@
+predicates:
+- name: saml_signature_wrapping_vuln
+  arity: 1
+  means: SAML endpoint is vulnerable to signature wrapping allowing forged assertions
+- name: host_header_injection_vuln
+  arity: 1
+  means: Endpoint ?e is vulnerable to Host Header Injection, allowing manipulation
+    of the Host header to affect server behavior.

@@ -1,0 +1,70 @@
+# JWT operators — hand-RE-GATED from the WS-D Memoria distill (candidates_memoria/jwt/).
+# The raw distill minted 4; reviewer pass (candidates_memoria/jwt/REVIEW.md) kept 2 outright
+# and flagged 2 for re-gate (fired too easily / unbound post var). These are those 2, fixed to
+# the SOUND+GATED bar, plus the 2 clean keepers re-homed here so the whole JWT class lives in
+# one reviewable file. STAGED — not merged.
+#
+# Gates are OBSERVABLES recon confirms about a token/endpoint; posts land on chainable
+# predicates (session, have_cred+cred_grants). New predicates in jwt_new_predicates.yaml.
+operators:
+
+# ---- alg:none — KEEPER from distill (sound as minted), re-homed ---------------------------
+- name: jwt-alg-none-forge
+  desc: Forge a JWT by setting alg to none where the verifier accepts unsigned tokens,
+    minting a token that authenticates at the role we encode.
+  cost: 2
+  tags: [web, auth, jwt]
+  refs: [CWE-347, "OWASP A07:2021", "OWASP API2:2023"]
+  pre:
+  - [tool, '?t', '?role']
+  - [jwt_alg_none_allowed, '?t']          # gate: verifier confirmed to accept alg:none
+  post:
+  - [have_cred, '?t_token']               # bound to the tool, not a free var
+  - [cred_grants, '?t_token', '?role']    # -> chains via cred-to-session to session(?role)
+
+# ---- RS256->HS256 algorithm confusion — RE-GATED (was: endpoint+trust_alg -> admin) -------
+# Fix: require we actually hold the RS256 public key (the confusion primitive's real
+# precondition) and parameterize the role instead of hardcoding admin.
+- name: jwt-alg-confusion-rs-to-hs
+  desc: Sign a forged HS256 token using the server's RS256 PUBLIC key as the HMAC secret,
+    where the verifier does not pin the algorithm — authenticating as any role we encode.
+  cost: 3
+  tags: [web, auth, jwt]
+  refs: [CWE-347, CWE-327, "OWASP A02:2021"]
+  pre:
+  - [tool, '?t', '?role']
+  - [jwt_alg_confusable, '?t']            # gate 1: verifier accepts a caller-chosen alg
+  - [have_cred, '?pubkey']               # gate 2: we hold the RS256 public key (recon-confirmed)
+  post:
+  - [have_cred, '?forged_token']
+  - [cred_grants, '?forged_token', '?role']
+
+# ---- HS256 weak-secret crack — RE-GATED (was: unbound have_cred(?secret)) -----------------
+# Fix: gate on possessing a crackable HS256 token; post the recovered signing key bound to
+# THAT token, and the sessions it can now mint (via a further forge, not assumed here).
+- name: jwt-hs256-weak-secret-crack
+  desc: Recover a weak HS256 signing secret from a captured token by offline cracking,
+    yielding the key needed to forge arbitrary tokens.
+  cost: 3
+  tags: [web, auth, jwt, credential-access]
+  refs: [CWE-326, CWE-521, "OWASP A02:2021"]
+  pre:
+  - [have_cred, '?token']                # we captured a token
+  - [jwt_hs256_weak, '?token']           # gate: confirmed HS256 + secret in a crackable space
+  post:
+  - [have_cred, '?token_signing_key']    # bound to the token — the recovered secret
+
+# ---- forged signing key -> session at a chosen role ---------------------------------------
+# Connects the crack above into an actual session so the chain reaches a goal predicate.
+- name: jwt-forge-with-key
+  desc: Mint a token at a chosen role using a recovered/possessed JWT signing key on a
+    verifier that trusts it.
+  cost: 1
+  tags: [web, auth, jwt]
+  refs: [CWE-347]
+  pre:
+  - [tool, '?t', '?role']
+  - [have_cred, '?signing_key']          # the key from the crack (or confusion)
+  - [jwt_key_trusted, '?t', '?signing_key']  # gate: this verifier trusts tokens signed by it
+  post:
+  - [session, attacker, '?role']

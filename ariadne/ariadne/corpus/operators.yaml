@@ -1,0 +1,808 @@
+# Ariadne technique corpus.
+# Each operator is a reusable attack technique: if its preconditions hold, it
+# yields its postconditions. Variables start with "?". Grow this file over time;
+# it is the shared, target-independent "database" of moves.
+#
+# Predicate vocabulary (keep consistent with target files):
+#   session(attacker, ROLE)      role in {anon,user,support,admin,root}
+#   have_cred(CRED)              we hold a credential
+#   cred_grants(CRED, ROLE)      that credential authenticates at ROLE
+#   cred_reused_on(CRED, USER)   same secret works as an OS/user login
+#   agent(A)                     an AI agent exists
+#   llm_echoes(A)                the agent will leak/echo its own context
+#   input_to_llm(A, CHANNEL)     we control input reaching that agent
+#   carries_secret(A, CRED)      the agent holds a secret in its context
+#   agent_role(A, ROLE)          agent is callable at ROLE
+#   has_tool(A, CAP)             agent has a capability tool (file_read/role_change/rce)
+#   tool(T, ROLE)                an app/tool T is callable at ROLE
+#   db_backed(T) / injectable(T) tool hits a DB / passes input unsanitized to SQL
+#   db_read(T)                   we can read arbitrary DB data through T
+#   db_table(TBL) / table_readable(TBL)
+#   db_engine(E) / file_priv(true)
+#   reset_flow                   forgot-password + reset-password endpoints exist
+#   account(ACCT, ROLE)          a target account exists at ROLE
+#   endpoint(E) / serves_file_by_param(E) / no_path_canonicalization(E)
+#   renders_user_input(E) / template_engine(E, jinja) / accepts_role_field(E)
+#   runs_as(PROC, USER)          process/agent/endpoint runs as OS USER
+#   can_read(USER, FILE)         OS USER can read FILE
+#   rce_as(USER)                 command execution as USER
+#   shell_interpolates(T, USER)  tool builds a shell string from our input as USER
+#   suid_binary(BIN, OWNER) / gtfobin(BIN, read_or_shell)
+#   writable_dir(USER, DIR) / reads_path_from(PROC, DIR)
+# Goal predicate is usually read_file(FILE) or session(attacker, admin).
+
+operators:
+  - name: prompt-injection-key-leak
+    desc: "Prompt-inject an LLM through a channel we control so it discloses a secret it holds (e.g. its own API key)."
+    cost: 1
+    tags: [ai, web, credential-access]
+    refs: ["OWASP LLM01 Prompt Injection", "OWASP LLM06 Sensitive Information Disclosure"]
+    pre:
+      - [agent, "?a"]
+      - [llm_echoes, "?a"]
+      - [input_to_llm, "?a", "?ch"]
+      - [carries_secret, "?a", "?cred"]
+    post:
+      - [have_cred, "?cred"]
+
+  - name: cred-to-session
+    desc: "Authenticate with a held credential to obtain a session at the role it grants."
+    cost: 1
+    tags: [web, auth]
+    pre:
+      - [have_cred, "?cred"]
+      - [cred_grants, "?cred", "?role"]
+    post:
+      - [session, attacker, "?role"]
+
+  - name: sqli-open-channel
+    desc: "A DB-backed tool that passes our input unsanitized into SQL gives arbitrary DB read (UNION)."
+    cost: 2
+    tags: [web, sqli]
+    refs: ["CWE-89 SQL Injection"]
+    pre:
+      - [tool, "?t", "?role"]
+      - [session, attacker, "?role"]
+      - [db_backed, "?t"]
+      - [injectable, "?t"]
+    post:
+      - [db_read, "?t"]
+
+  - name: sqli-read-table
+    desc: "With arbitrary DB read, dump any existing table."
+    cost: 1
+    tags: [web, sqli]
+    pre:
+      - [db_read, "?t"]
+      - [db_table, "?tbl"]
+    post:
+      - [table_readable, "?tbl"]
+
+  - name: reset-token-takeover
+    desc: "Read a target account's password-reset token from the DB, then reset its password to take over the account."
+    cost: 2
+    tags: [web, auth, account-takeover]
+    refs: ["CWE-640 Weak Password Recovery", "CWE-89"]
+    pre:
+      - [reset_flow]
+      - [table_readable, reset_tokens]
+      - [account, "?acct", admin]
+    post:
+      - [session, attacker, admin]
+
+  - name: mass-assignment-privesc
+    desc: "A registration/profile endpoint that trusts a client-supplied role field lets us self-promote."
+    cost: 1
+    tags: [web, privesc]
+    refs: ["CWE-915 Mass Assignment"]
+    pre:
+      - [endpoint, "?e"]
+      - [accepts_role_field, "?e"]
+      - [session, attacker, "?any"]
+    post:
+      - [session, attacker, admin]
+
+  - name: agent-file-read
+    desc: "An AI agent reachable at our role has a file-read tool and runs as a user who can read the target file. Drive it to read the file for us."
+    cost: 1
+    tags: [ai, file-read, confused-deputy]
+    refs: ["OWASP LLM08 Excessive Agency", "CWE-22 Path Traversal (tool scope)"]
+    # ordering matters: bind the agent identity + the file-read constraints first,
+    # which forces ?role, so the session subgoal is solved at the RIGHT role.
+    pre:
+      - [has_tool, "?agent", file_read]
+      - [agent, "?agent"]
+      - [runs_as, "?agent", "?u"]
+      - [can_read, "?u", "?file"]
+      - [agent_role, "?agent", "?role"]
+      - [session, attacker, "?role"]
+    post:
+      - [read_file, "?file"]
+
+  - name: agent-rce
+    desc: "An AI agent reachable at our role has a command/exec tool; drive it to run code as its own user."
+    cost: 1
+    tags: [ai, rce]
+    refs: ["OWASP LLM08 Excessive Agency"]
+    pre:
+      - [has_tool, "?agent", rce]
+      - [agent, "?agent"]
+      - [runs_as, "?agent", "?u"]
+      - [agent_role, "?agent", "?role"]
+      - [session, attacker, "?role"]
+    post:
+      - [rce_as, "?u"]
+
+  - name: command-injection-rce
+    desc: "A tool that builds a shell command from our input executes command-substitution as its process user."
+    cost: 2
+    tags: [os, rce, injection]
+    refs: ["CWE-78 OS Command Injection"]
+    pre:
+      - [tool, "?t", "?role"]
+      - [session, attacker, "?role"]
+      - [shell_interpolates, "?t", "?u"]
+    post:
+      - [rce_as, "?u"]
+
+  - name: lfi-path-traversal
+    desc: "An endpoint that serves a file from a user-controlled path without canonicalization reads arbitrary files as its process user."
+    cost: 2
+    tags: [web, file-read]
+    refs: ["CWE-22 Path Traversal"]
+    pre:
+      - [endpoint, "?e"]
+      - [serves_file_by_param, "?e"]
+      - [no_path_canonicalization, "?e"]
+      - [runs_as, "?e", "?u"]
+      - [can_read, "?u", "?file"]
+    post:
+      - [read_file, "?file"]
+
+  - name: ssti-rce
+    desc: "User input rendered through a template engine yields code execution as the web process user."
+    cost: 2
+    tags: [web, rce]
+    refs: ["CWE-1336 Server-Side Template Injection"]
+    pre:
+      - [renders_user_input, "?e"]
+      - [template_engine, "?e", jinja]
+      - [runs_as, "?e", "?u"]
+    post:
+      - [rce_as, "?u"]
+
+  - name: os-rce-file-read
+    desc: "With command execution as a user who can read the file, just read it."
+    cost: 1
+    tags: [os, file-read]
+    pre:
+      - [rce_as, "?u"]
+      - [can_read, "?u", "?file"]
+    post:
+      - [read_file, "?file"]
+
+  - name: sqli-load-file
+    desc: "MySQL LOAD_FILE through a SQLi channel reads arbitrary files, if the DB user has FILE priv and secure_file_priv permits."
+    cost: 2
+    tags: [web, sqli, file-read]
+    refs: ["CWE-89", "MySQL LOAD_FILE"]
+    pre:
+      - [db_read, "?t"]
+      - [db_engine, mysql]
+      - [file_priv, "true"]
+    post:
+      - [read_file, "?file"]
+
+  - name: symlink-bridge-read
+    desc: "Confused deputy: with write access as one user to a dir a higher-priv process reads from, plant a symlink to the target file so that process reads it for us."
+    cost: 3
+    tags: [os, confused-deputy, file-read]
+    pre:
+      - [rce_as, "?u1"]
+      - [writable_dir, "?u1", "?dir"]
+      - [reads_path_from, "?proc", "?dir"]
+      - [runs_as, "?proc", "?u2"]
+      - [can_read, "?u2", "?file"]
+    post:
+      - [read_file, "?file"]
+
+  # ---- GTFOBins-backed operators (facts loaded from corpus/knowledge/gtfobins.yaml) ----
+  - name: gtfobin-suid-fileread
+    desc: "A SUID-root binary with a GTFOBins file-read reads any file as root."
+    cost: 2
+    tags: [os, privesc, file-read, gtfobins]
+    refs: ["GTFOBins (file-read/SUID)", "CWE-269 Improper Privilege Management"]
+    pre:
+      - [rce_as, "?u"]
+      - [suid_binary, "?bin", root]
+      - [gtfobin, "?bin", file-read, suid]
+    post:
+      - [read_file, "?file"]
+
+  - name: gtfobin-sudo-fileread
+    desc: "A binary we may run via sudo with a GTFOBins file-read reads any file as root."
+    cost: 1
+    tags: [os, privesc, file-read, gtfobins]
+    refs: ["GTFOBins (file-read/Sudo)"]
+    pre:
+      - [can_sudo, "?u", "?bin"]
+      - [gtfobin, "?bin", file-read, sudo]
+    post:
+      - [read_file, "?file"]
+
+  - name: gtfobin-suid-shell
+    desc: "A SUID binary with a GTFOBins shell escalates to the binary owner."
+    cost: 2
+    tags: [os, privesc, gtfobins]
+    refs: ["GTFOBins (shell/SUID)"]
+    pre:
+      - [rce_as, "?u"]
+      - [suid_binary, "?bin", "?owner"]
+      - [gtfobin, "?bin", shell, suid]
+    post:
+      - [rce_as, "?owner"]
+
+  - name: gtfobin-sudo-shell
+    desc: "A binary we may run via sudo with a GTFOBins shell escalates to root."
+    cost: 1
+    tags: [os, privesc, gtfobins]
+    refs: ["GTFOBins (shell/Sudo)"]
+    pre:
+      - [can_sudo, "?u", "?bin"]
+      - [gtfobin, "?bin", shell, sudo]
+    post:
+      - [rce_as, root]
+
+  - name: cred-reuse-login
+    desc: "A leaked application secret is reused as an OS/service credential."
+    cost: 1
+    tags: [os, credential-access]
+    refs: ["CWE-522 Insufficiently Protected Credentials"]
+    pre:
+      - [have_cred, "?c"]
+      - [cred_reused_on, "?c", "?u"]
+    post:
+      - [rce_as, "?u"]
+
+  # ---- Distilled from Payloads-All-The-Things, then hand-reviewed (2026-08-04). ----
+  # 7 of 21 candidates kept; each is GATED by a specific vulnerability predicate so it
+  # cannot fire on a target that hasn't confirmed that vuln (which is what stops them
+  # inventing false paths, e.g. an injectable search tool != a SQLi login bypass).
+  - name: ldap-auth-bypass
+    desc: "A login/query tool that builds an LDAP filter from our input can be injected with an always-true condition to authenticate as admin."
+    cost: 3
+    tags: [web, ldap, auth-bypass]
+    refs: ["CWE-90 LDAP Injection"]
+    pre:
+      - [tool, "?t", "?role"]
+      - [session, attacker, "?role"]
+      - [ldap_injectable, "?t"]
+    post:
+      - [session, attacker, admin]
+
+  - name: nosql-auth-bypass
+    desc: "A tool that builds a NoSQL query from our input accepts operator injection ($ne/$gt) to bypass authentication as admin."
+    cost: 3
+    tags: [web, nosql, auth-bypass]
+    refs: ["CWE-943 Improper Neutralization in a Data Query"]
+    pre:
+      - [tool, "?t", "?role"]
+      - [session, attacker, "?role"]
+      - [nosql_injectable, "?t"]
+    post:
+      - [session, attacker, admin]
+
+  - name: deserialization-rce
+    desc: "A tool that deserializes attacker-controlled data unsafely yields code execution as its process user."
+    cost: 3
+    tags: [web, rce, deserialization]
+    refs: ["CWE-502 Deserialization of Untrusted Data"]
+    pre:
+      - [tool, "?t", "?role"]
+      - [session, attacker, "?role"]
+      - [insecure_deserialization, "?t"]
+      - [runs_as, "?t", "?u"]
+    post:
+      - [rce_as, "?u"]
+
+  - name: gadget-prototype-rce
+    desc: "A JSON-parsing tool with a known prototype-pollution gadget reaching a sink yields code execution as its process user."
+    cost: 4
+    tags: [web, rce, prototype-pollution]
+    refs: ["CWE-1321 Prototype Pollution"]
+    pre:
+      - [tool, "?t", "?role"]
+      - [session, attacker, "?role"]
+      - [has_gadget, "?t", rce]
+      - [runs_as, "?t", "?u"]
+    post:
+      - [rce_as, "?u"]
+
+  - name: ssti-file-read
+    desc: "Server-side template injection reads a file the template process can access (the file-read cousin of ssti-rce; any engine)."
+    cost: 3
+    tags: [web, ssti, file-read]
+    refs: ["CWE-1336 Server-Side Template Injection"]
+    pre:
+      - [renders_user_input, "?e"]
+      - [template_engine, "?e", "?engine"]
+      - [runs_as, "?e", "?u"]
+      - [can_read, "?u", "?file"]
+    post:
+      - [read_file, "?file"]
+
+  - name: xxe-file-read
+    desc: "An XML parser with external entities enabled resolves a file:// entity, reading a file the parser process can access."
+    cost: 3
+    tags: [web, xxe, file-read]
+    refs: ["CWE-611 Improper Restriction of XML External Entity Reference"]
+    pre:
+      - [xxe_vulnerable, "?e"]
+      - [runs_as, "?e", "?u"]
+      - [can_read, "?u", "?file"]
+    post:
+      - [read_file, "?file"]
+
+  - name: run-public-exploit
+    desc: "A public exploit exists for a vulnerable product that an endpoint is running; run it for code execution as that endpoint's user. (Wires the Exploit-DB lookup into planning.)"
+    cost: 2
+    tags: [exploit, rce]
+    refs: ["Exploit-DB"]
+    pre:
+      - [vuln_present, "?e", "?prod"]
+      - [known_exploit, "?prod", "?cve"]
+      - [runs_as, "?e", "?u"]
+    post:
+      - [rce_as, "?u"]
+
+  # ============================================================================
+  # ACTIVE DIRECTORY tier (BloodHound-aligned). The graph-DERIVATION operators
+  # below are hand-authored because their correctness is the whole point; the
+  # TECHNIQUE operators (roasting, delegation) are distilled + reviewed. Reached
+  # state: controls_principal(P) = we can act as P; pwn_host(H) = admin on H.
+  # ============================================================================
+  - name: ad-pth
+    desc: "Pass-the-hash: an NT hash authenticates us as that principal."
+    cost: 1
+    tags: [ad, lateral-movement, credential-access]
+    refs: ["MITRE T1550.002 Pass the Hash"]
+    pre:
+      - [has_hash, "?p"]
+    post:
+      - [controls_principal, "?p"]
+
+  - name: ad-ptt
+    desc: "Pass-the-ticket: a Kerberos ticket authenticates us as that principal."
+    cost: 1
+    tags: [ad, lateral-movement, kerberos]
+    refs: ["MITRE T1550.003 Pass the Ticket"]
+    pre:
+      - [has_ticket, "?p"]
+    post:
+      - [controls_principal, "?p"]
+
+  # NOTE on precondition ORDER: lead every operator with the graph predicate that
+  # binds the principal from a FACT (member_of / admin_to / controls_ace / has_session),
+  # THEN the recursive controls_principal/pwn_host check. Leading with an unbound
+  # controls_principal(?p) makes the planner try to prove "control ANY principal" and
+  # the search explodes. (Same lesson as agent-file-read.)
+  - name: ad-group-inherit
+    desc: "A group's outbound access (local-admin rights, ACLs) is wielded by any member; controlling a member lets us exercise the group's edges."
+    cost: 0
+    tags: [ad, graph]
+    refs: ["BloodHound MemberOf"]
+    pre:
+      - [member_of, "?p", "?g"]
+      - [controls_principal, "?p"]
+    post:
+      - [controls_principal, "?g"]
+
+  - name: ad-admin-to-pwn
+    desc: "A principal we control that is local admin on a host gives us code execution there."
+    cost: 1
+    tags: [ad, lateral-movement]
+    refs: ["BloodHound AdminTo"]
+    pre:
+      - [admin_to, "?p", "?h"]
+      - [controls_principal, "?p"]
+    post:
+      - [pwn_host, "?h"]
+
+  - name: ad-harvest-sessions
+    desc: "Admin on a host lets us dump LSASS and steal the NT hash of any principal with a session there."
+    cost: 1
+    tags: [ad, credential-access]
+    refs: ["BloodHound HasSession", "MITRE T1003.001 LSASS Memory"]
+    pre:
+      - [has_session, "?h", "?p"]
+      - [pwn_host, "?h"]
+    post:
+      - [has_hash, "?p"]
+
+  - name: ad-dcsync
+    desc: "A principal we control with DCSync rights replicates the directory to dump any account's hash, including a domain admin's."
+    cost: 1
+    tags: [ad, credential-access, domain-dominance]
+    refs: ["BloodHound DCSync/GetChangesAll", "MITRE T1003.006 DCSync"]
+    pre:
+      - [dcsync_rights, "?p"]
+      - [controls_principal, "?p"]
+      - [domain_admin, "?da"]
+    post:
+      - [has_hash, "?da"]
+
+  # ---- ACL abuse (each gated on the specific right; BloodHound ACL edges) ----
+  - name: ad-acl-addmember
+    desc: "AddMember / GenericWrite / GenericAll on a group lets us add ourselves to it."
+    cost: 1
+    tags: [ad, acl-abuse]
+    refs: ["BloodHound AddMember/GenericWrite (group)"]
+    pre:
+      - [controls_ace, "?p", "?g", AddMember]
+      - [principal, "?g", group]
+      - [controls_principal, "?p"]
+    post:
+      - [member_of, "?p", "?g"]
+
+  - name: ad-acl-genericall-group
+    desc: "GenericAll over a group is full control, including membership."
+    cost: 1
+    tags: [ad, acl-abuse]
+    refs: ["BloodHound GenericAll (group)"]
+    pre:
+      - [controls_ace, "?p", "?g", GenericAll]
+      - [principal, "?g", group]
+      - [controls_principal, "?p"]
+    post:
+      - [member_of, "?p", "?g"]
+
+  - name: ad-acl-forcechangepassword
+    desc: "ForceChangePassword over a user lets us reset its password and so learn its hash."
+    cost: 1
+    tags: [ad, acl-abuse, credential-access]
+    refs: ["BloodHound ForceChangePassword"]
+    pre:
+      - [controls_ace, "?p", "?u", ForceChangePassword]
+      - [principal, "?u", user]
+      - [controls_principal, "?p"]
+    post:
+      - [has_hash, "?u"]
+
+  - name: ad-acl-genericall-user
+    desc: "GenericAll over a user (reset password or add shadow credentials) yields its hash."
+    cost: 1
+    tags: [ad, acl-abuse, credential-access]
+    refs: ["BloodHound GenericAll (user)", "Shadow Credentials"]
+    pre:
+      - [controls_ace, "?p", "?u", GenericAll]
+      - [principal, "?u", user]
+      - [controls_principal, "?p"]
+    post:
+      - [has_hash, "?u"]
+
+  - name: ad-acl-writedacl
+    desc: "WriteDacl over an object lets us grant ourselves GenericAll over it."
+    cost: 1
+    tags: [ad, acl-abuse]
+    refs: ["BloodHound WriteDacl"]
+    pre:
+      - [controls_ace, "?p", "?t", WriteDacl]
+      - [controls_principal, "?p"]
+    post:
+      - [controls_ace, "?p", "?t", GenericAll]
+
+  - name: ad-acl-owns
+    desc: "Owning an object lets us write its DACL."
+    cost: 1
+    tags: [ad, acl-abuse]
+    refs: ["BloodHound Owns"]
+    pre:
+      - [controls_ace, "?p", "?t", Owns]
+      - [controls_principal, "?p"]
+    post:
+      - [controls_ace, "?p", "?t", WriteDacl]
+
+  - name: ad-crack-hash
+    desc: "A captured roastable hash with a weak password is cracked offline to recover the plaintext (and thus the usable hash)."
+    cost: 3
+    tags: [ad, credential-access, offline]
+    refs: ["MITRE T1110.002 Password Cracking"]
+    pre:
+      - [crackable_hash, "?p"]
+    post:
+      - [has_hash, "?p"]
+
+  # ---- AD technique operators: distilled from the-hacker-recipes, then hand-authored
+  #      to correct the LLM's unsound versions (wildcard controls_principal(?u),
+  #      kerberoast mis-modeled as read_file, ungated ticket theft). See
+  #      candidates_ad/REVIEW.md. Each is gated on the specific AD condition.
+  - name: ad-kerberoast
+    desc: "Any authenticated principal can request a service ticket for an account with an SPN and get its crackable hash (Kerberoasting)."
+    cost: 2
+    tags: [ad, kerberos, credential-access]
+    refs: ["MITRE T1558.003 Kerberoasting", "BloodHound HasSPN"]
+    pre:
+      - [kerberoastable, "?svc"]
+      - [controls_principal, "?me"]
+    post:
+      - [crackable_hash, "?svc"]
+
+  - name: ad-asreproast
+    desc: "A user with Kerberos pre-auth disabled yields a crackable AS-REP hash to any unauthenticated requester (AS-REP roasting)."
+    cost: 2
+    tags: [ad, kerberos, credential-access]
+    refs: ["MITRE T1558.004 AS-REP Roasting"]
+    pre:
+      - [asreproastable, "?p"]
+      - [principal, "?p", user]
+    post:
+      - [crackable_hash, "?p"]
+
+  - name: ad-harvest-tickets
+    desc: "Admin on a host lets us extract the Kerberos tickets of any principal with a session there."
+    cost: 1
+    tags: [ad, kerberos, credential-access]
+    refs: ["MITRE T1558 Steal or Forge Kerberos Tickets", "BloodHound HasSession"]
+    pre:
+      - [has_session, "?h", "?p"]
+      - [pwn_host, "?h"]
+    post:
+      - [has_ticket, "?p"]
+
+  - name: ad-rbcd
+    desc: "GenericWrite over a computer lets us set resource-based constrained delegation and S4U-impersonate a privileged user to it, gaining local admin."
+    cost: 3
+    tags: [ad, kerberos, delegation, lateral-movement]
+    refs: ["Resource-Based Constrained Delegation (RBCD)", "BloodHound GenericWrite (computer)"]
+    pre:
+      - [controls_ace, "?p", "?comp", GenericWrite]
+      - [principal, "?comp", computer]
+      - [controls_principal, "?p"]
+    post:
+      - [pwn_host, "?comp"]
+
+  - name: ad-unconstrained-deleg
+    desc: "From a host trusted for unconstrained delegation, coerce a DC to authenticate and capture its TGT (usable as the DC machine account)."
+    cost: 3
+    tags: [ad, kerberos, delegation, domain-dominance]
+    refs: ["Unconstrained Delegation + PrinterBug/PetitPotam coercion"]
+    pre:
+      - [pwn_host, "?h"]
+      - [unconstrained_deleg, "?h"]
+      - [is_dc, "?dc"]
+      - [coercible, "?dc"]
+    post:
+      - [has_ticket, "?dc"]
+
+  - name: ad-constrained-deleg
+    desc: "A principal we control that is configured for constrained delegation to a service can S4U-impersonate a privileged user to it, gaining admin on that host."
+    cost: 3
+    tags: [ad, kerberos, delegation, lateral-movement]
+    refs: ["Constrained Delegation (S4U2self/S4U2proxy)"]
+    pre:
+      - [constrained_deleg_to, "?p", "?h"]
+      - [controls_principal, "?p"]
+    post:
+      - [pwn_host, "?h"]
+
+  # ---- ADCS certificate abuse (Certipy / Certified Pre-Owned). Certificates become
+  #      the reached-state has_cert(P), bridged to controls_principal by PKINIT. ----
+  - name: adcs-esc1
+    desc: "An enrollable template that lets the requester supply the SAN with a client-auth EKU lets us request a certificate for ANY principal (e.g. a domain admin)."
+    cost: 2
+    tags: [ad, adcs, privesc]
+    refs: ["ADCS ESC1 (Certified Pre-Owned)"]
+    pre:
+      - [template_esc1, "?t"]
+      - [cert_template, "?t", "?ca"]
+      - [can_enroll, "?p", "?t"]
+      - [controls_principal, "?p"]
+      - [principal, "?victim", user]
+    post:
+      - [has_cert, "?victim"]
+
+  - name: adcs-esc8-relay
+    desc: "Coerce a DC to authenticate, relay the NTLM to the CA's web-enrollment endpoint, and obtain a certificate for the DC machine account."
+    cost: 3
+    tags: [ad, adcs, relay, domain-dominance]
+    refs: ["ADCS ESC8 (web enrollment NTLM relay)"]
+    pre:
+      - [ca_esc8, "?ca"]
+      - [is_dc, "?dc"]
+      - [coercible, "?dc"]
+    post:
+      - [has_cert, "?dc"]
+
+  - name: ad-shadow-credentials
+    desc: "AddKeyCredentialLink / GenericWrite over a target lets us add a key credential and PKINIT-authenticate as it."
+    cost: 2
+    tags: [ad, adcs, acl-abuse, credential-access]
+    refs: ["Shadow Credentials (msDS-KeyCredentialLink)"]
+    pre:
+      - [controls_ace, "?p", "?target", AddKeyCredentialLink]
+      - [controls_principal, "?p"]
+    post:
+      - [has_cert, "?target"]
+
+  - name: ad-pass-the-certificate
+    desc: "A certificate authenticating as a principal is used with PKINIT to obtain a TGT (and, via UnPAC-the-hash, the NT hash), letting us act as that principal."
+    cost: 1
+    tags: [ad, kerberos, credential-access]
+    refs: ["Pass-the-Certificate (PKINIT)", "UnPAC-the-hash"]
+    pre:
+      - [has_cert, "?p"]
+    post:
+      - [controls_principal, "?p"]
+
+  # ============================================================================
+  # ADCS extended ESC tier (2026-08-21). Hand-authored, each gated on a SPECIFIC
+  # observable Certipy/certutil reports (a template flag, a CA flag, or an ACL).
+  # ESC1 and ESC8 already exist above; these MATCH their idiom (certificates are
+  # the reached-state has_cert(P), bridged to controls_principal by PKINIT via
+  # ad-pass-the-certificate). Refs: SpecterOps "Certified Pre-Owned" ESC1-ESC11,
+  # Certipy wiki, the-hacker-recipes ADCS pages.
+  # ============================================================================
+  - name: adcs-esc2
+    desc: "An enrollable template with an Any-Purpose (or no/SubCA) EKU that also lets the enrollee supply the subject/SAN lets us request a cert usable to authenticate as ANY principal (ESC2)."
+    cost: 2
+    tags: [ad, adcs, privesc]
+    refs: ["ADCS ESC2 (Certified Pre-Owned)", "the-hacker-recipes ADCS ESC2"]
+    pre:
+      - [template_esc2, "?t"]
+      - [cert_template, "?t", "?ca"]
+      - [can_enroll, "?p", "?t"]
+      - [controls_principal, "?p"]
+      - [principal, "?victim", user]
+    post:
+      - [has_cert, "?victim"]
+
+  - name: adcs-esc3
+    desc: "Enroll in an Enrollment-Agent template (Certificate Request Agent EKU), then use that agent cert to request a client-auth cert ON BEHALF OF any user from an agent-enabled template (ESC3)."
+    cost: 3
+    tags: [ad, adcs, privesc]
+    refs: ["ADCS ESC3 (Certified Pre-Owned)", "the-hacker-recipes ADCS ESC3"]
+    pre:
+      - [template_esc3, "?t1"]
+      - [cert_template, "?t1", "?ca"]
+      - [can_enroll, "?p", "?t1"]
+      - [controls_principal, "?p"]
+      - [template_enrollagent_target, "?t2"]
+      - [cert_template, "?t2", "?ca"]
+      - [principal, "?victim", user]
+    post:
+      - [has_cert, "?victim"]
+
+  - name: adcs-esc4
+    desc: "Write access (GenericWrite/GenericAll) over a certificate-template object lets us reconfigure it into an ESC1-vulnerable template (enable enrollee-supplies-subject + a client-auth EKU)."
+    cost: 2
+    tags: [ad, adcs, acl-abuse]
+    refs: ["ADCS ESC4 (Certified Pre-Owned)", "BloodHound GenericWrite (certtemplate)"]
+    pre:
+      - [controls_ace, "?p", "?t", GenericWrite]
+      - [cert_template, "?t", "?ca"]
+      - [controls_principal, "?p"]
+    post:
+      - [template_esc1, "?t"]
+
+  - name: adcs-esc6
+    desc: "When the CA has EDITF_ATTRIBUTESUBJECTALTNAME2 set, ANY enrollable client-auth template lets us add an arbitrary SAN to the request and get a cert for any principal (ESC6)."
+    cost: 2
+    tags: [ad, adcs, privesc]
+    refs: ["ADCS ESC6 (Certified Pre-Owned)", "Certipy ca -editf"]
+    pre:
+      - [ca_esc6, "?ca"]
+      - [cert_template, "?t", "?ca"]
+      - [template_client_auth, "?t"]
+      - [can_enroll, "?p", "?t"]
+      - [controls_principal, "?p"]
+      - [principal, "?victim", user]
+    post:
+      - [has_cert, "?victim"]
+
+  - name: adcs-esc7-manageca
+    desc: "ManageCA rights on the CA let us flip the EDITF_ATTRIBUTESUBJECTALTNAME2 flag ourselves, turning the CA into an ESC6 target."
+    cost: 2
+    tags: [ad, adcs, acl-abuse]
+    refs: ["ADCS ESC7 (Certified Pre-Owned)", "Certipy ca -add-officer / -editf"]
+    pre:
+      - [controls_ace, "?p", "?ca", ManageCA]
+      - [ca, "?ca"]
+      - [controls_principal, "?p"]
+    post:
+      - [ca_esc6, "?ca"]
+
+  - name: adcs-esc11-icpr-relay
+    desc: "When the CA's RPC enrollment (ICPR) does not enforce packet privacy, coerce a DC and relay its unsigned NTLM over RPC to the CA to obtain a certificate for the DC machine account (ESC11)."
+    cost: 3
+    tags: [ad, adcs, relay, domain-dominance]
+    refs: ["ADCS ESC11 (RPC ICertPassage relay)", "sploutchy/impacket ntlmrelayx -rpc"]
+    pre:
+      - [ca_esc11, "?ca"]
+      - [is_dc, "?dc"]
+      - [coercible, "?dc"]
+    post:
+      - [has_cert, "?dc"]
+
+  - name: adcs-certifried
+    desc: "CVE-2022-26923: create a machine account, spoof its dNSHostName to a DC's, and enroll a client-auth machine cert on an unpatched CA to get a certificate authenticating as the DC machine account."
+    cost: 3
+    tags: [ad, adcs, privesc, domain-dominance]
+    refs: ["CVE-2022-26923 (Certifried)", "Certipy account/req -dns", "the-hacker-recipes Certifried"]
+    pre:
+      - [certifried_vuln, "?ca"]
+      - [cert_template, "?t", "?ca"]
+      - [template_client_auth, "?t"]
+      - [can_add_computer, "?p"]
+      - [controls_principal, "?p"]
+      - [is_dc, "?dc"]
+    post:
+      - [has_cert, "?dc"]
+
+  # ============================================================================
+  # AD object-control abuse (2026-08-21). BloodHound ACL/GPO edges -> reached
+  # state. Each leads with the graph edge that binds the target, then the
+  # recursive controls_principal check (the ordering lesson from ad-* above).
+  # ============================================================================
+  - name: ad-gpo-abuse
+    desc: "Edit rights over a GPO let us push a scheduled task / immediate task to every computer the GPO is linked to, gaining code execution there (SharpGPOAbuse)."
+    cost: 2
+    tags: [ad, gpo, lateral-movement]
+    refs: ["MITRE T1484.001 GPO Modification", "BloodHound GenericWrite/GPLink (GPO)", "SharpGPOAbuse"]
+    pre:
+      - [controls_ace, "?p", "?gpo", GenericWrite]
+      - [principal, "?gpo", gpo]
+      - [gpo_linked_to, "?gpo", "?h"]
+      - [controls_principal, "?p"]
+    post:
+      - [pwn_host, "?h"]
+
+  - name: ad-laps-read
+    desc: "ReadLAPSPassword (read ms-Mcs-AdmPwd) over a computer discloses its randomized local Administrator password, giving local admin on that host."
+    cost: 1
+    tags: [ad, credential-access, lateral-movement]
+    refs: ["BloodHound ReadLAPSPassword", "MITRE T1555 Credentials from Password Stores", "the-hacker-recipes LAPS"]
+    pre:
+      - [controls_ace, "?p", "?comp", ReadLAPSPassword]
+      - [principal, "?comp", computer]
+      - [controls_principal, "?p"]
+    post:
+      - [pwn_host, "?comp"]
+
+  - name: ad-gmsa-read
+    desc: "ReadGMSAPassword over a group-managed service account lets us read msDS-ManagedPassword and derive the account's NT hash (gMSADumper)."
+    cost: 1
+    tags: [ad, credential-access]
+    refs: ["BloodHound ReadGMSAPassword", "MITRE T1003 OS Credential Dumping", "gMSADumper"]
+    pre:
+      - [controls_ace, "?p", "?gmsa", ReadGMSAPassword]
+      - [controls_principal, "?p"]
+    post:
+      - [has_hash, "?gmsa"]
+
+  # ============================================================================
+  # MSSQL tier (2026-08-21). Linked-server privilege chaining + xp_cmdshell RCE.
+  # Refs: HackTricks "MSSQL AD Abuse", PayloadsAllTheThings MSSQL Injection.
+  # ============================================================================
+  - name: mssql-linked-sysadmin
+    desc: "A linked server whose remote login context is privileged lets us run queries on the linked instance (EXECUTE AT / openquery) as sysadmin there."
+    cost: 2
+    tags: [mssql, lateral-movement, privesc]
+    refs: ["HackTricks MSSQL Linked Servers", "PayloadsAllTheThings MSSQL Injection (linked servers)"]
+    pre:
+      - [mssql_login, "?src"]
+      - [mssql_linked, "?src", "?dst"]
+    post:
+      - [mssql_sysadmin, "?dst"]
+      - [mssql_login, "?dst"]
+
+  - name: mssql-xp-cmdshell
+    desc: "sysadmin on an MSSQL instance can enable and call xp_cmdshell to run OS commands as the SQL Server service account on that host."
+    cost: 2
+    tags: [mssql, rce]
+    refs: ["MITRE T1505.001 SQL Stored Procedures", "HackTricks MSSQL xp_cmdshell"]
+    pre:
+      - [mssql_sysadmin, "?h"]
+      - [mssql_login, "?h"]
+      - [runs_as, "?h", "?svc"]
+    post:
+      - [rce_as, "?svc"]

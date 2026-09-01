@@ -1,0 +1,21 @@
+# A Linux foothold demo. We have a low-priv web shell and recon found that
+# `find` is SUID root. Goal: read the root proof file. Ariadne should pull the
+# GTFOBins knowledge (find has file-read AND shell under SUID) with no hand-authored
+# per-binary rules, and rank the direct file-read above the privesc-then-read path.
+
+name: linux_privesc
+
+goal: [read_file, "/root/proof.txt"]
+
+facts:
+  - [rce_as, "www-data"]                 # a web shell (e.g. from an upload / RCE)
+  - [suid_binary, find, root]            # recon: find is SUID root
+  - [file, "/root/proof.txt"]
+  - [can_read, root, "/root/proof.txt"]  # root can read the proof file
+
+negatives: []
+
+notes: >
+  gtfobin(find, file-read, suid) and gtfobin(find, shell, suid) come from the
+  ingested GTFOBins knowledge base, not this file. The planner should find both
+  the one-step file-read and the two-step shell-to-root-then-read path.

@@ -1,0 +1,25 @@
+# PhantomKernel as we knew it EARLY -- stuck, hours in, before the Task-6 breakthrough.
+# Observable: two chatbots, a support search feature, a reset flow, an admin tier, and the
+# MCP/newsletter RCE (as uid999). Already burned time CONFIRMING two dead-ends (negatives).
+# UNKNOWN (left to assumptions): the key-leak chain, that search_message is injectable, and
+# critically the Task-6 mechanism (does an admin agent have a file-read tool, as whom?).
+name: phantomkernel_early
+goal: [read_file, "/secret_data.txt"]
+facts:
+  - [file, "/secret_data.txt"]
+  - [agent, kernelgate]
+  - [agent, sysmind]
+  - [tool, search_message, support]
+  - [db_backed, search_message]
+  - [reset_flow]
+  - [account, admin_user, admin]
+  # the tempting RCE rabbit hole we DID find:
+  - [tool, newsletter_export, support]
+  - [shell_interpolates, newsletter_export, uid999]
+  - [rce_as, uid999]
+  - [writable_dir, uid999, "/tmp"]
+negatives:
+  # dead-ends we already proved (and wasted hours on):
+  - [can_read, uid999, "/secret_data.txt"]   # OS-RCE read: Permission denied
+  - [file_priv, "true"]                      # LOAD_FILE blocked
+notes: Early/stuck state. What would Ariadne have told us to do?

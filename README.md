@@ -33,14 +33,17 @@ and the governed door decides whether the trigger fires.
 | Trooper | `live/trooper.py` | on-target executor (any model) |
 | Manager | `manager/`, `live/autocannon.py` | authors commands from the live map |
 | Cartographer / hands | `live/` | autonomous recon — builds the map itself |
+| Ariadne planner | `ariadne/` | attack-path planner the manager consults; advisory, served on `:8112` |
 | Catalog | `catalog/deck_final.yaml` | attack-recipe library (a library, never the decider) |
 | Scorer | `scorer/` | grounded verification of results |
 | Tests | `tests/` | governance + scorer integrity suites |
 
 ## Deliberately NOT included
 
-- **No exploit corpus / cheat-sheet library.** A capable frontier model already knows
-  the exploits — bundling a static playbook adds megabytes and no capability.
+- **No cheat-sheet playbook for the executor.** The trooper is never fed a static
+  answer-key — a capable frontier model authors the commands. (The Ariadne *planner*
+  under `ariadne/` does ship its own symbolic operator corpus + an offline Exploit-DB
+  *index* for path ranking; that is advisory input to the manager, not a trooper playbook.)
 - **No frontend.** This is the backend engine only.
 - **No secrets, no engagement transcripts.** Bring your own keys and scope.
 
@@ -56,7 +59,10 @@ export TROOPER_KEY_FILE=~/.config/bs2/trooper.key
 python3 live/broker/bs2_cli_broker.py &     # the broker
 python3 live/broker/bs2_gate.py             # the TTY approver — y/n on every command
 
-# 3. run the manager against a scoped target
+# 3. (optional) start the Ariadne attack-path planner for path ranking
+bash scripts/start_ariadne.sh &             # serves :8112; advisory, safe to omit
+
+# 4. run the manager against a scoped target
 python3 live/autocannon.py --target 198.51.100.10
 ```
 

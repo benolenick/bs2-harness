@@ -1,0 +1,4 @@
+predicates:
+- name: open_redirect
+  arity: 1
+  means: Endpoint allows open redirect via a parameter (e.g., redirect_uri).

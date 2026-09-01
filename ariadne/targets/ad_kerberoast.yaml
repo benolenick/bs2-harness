@@ -1,0 +1,14 @@
+# Authenticated as low-priv bob. A service account (svc_sql) is Kerberoastable and has
+# GenericWrite over a file server. Goal: own the file server via kerberoast -> crack ->
+# pass-the-hash -> RBCD.
+name: ad_kerberoast
+goal: [pwn_host, FILES01]
+facts:
+  - [controls_principal, bob]
+  - [principal, bob, user]
+  - [kerberoastable, svc_sql]
+  - [principal, svc_sql, user]
+  - [controls_ace, svc_sql, FILES01, GenericWrite]
+  - [principal, FILES01, computer]
+negatives: []
+notes: Exercises ad-kerberoast, ad-crack-hash, ad-pth, ad-rbcd.

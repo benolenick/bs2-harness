@@ -1,0 +1,112 @@
+# Ariadne predicate vocabulary — the controlled language the extractor must speak.
+# Each entry: name, arity, one-line meaning, and an example ground fact.
+# The schema loader cross-checks this against every predicate used in the operator
+# corpus, so if you add an operator with a new predicate, add it here too or the
+# self-check will flag it. The extractor is told ONLY these predicates exist and
+# any tuple it emits with an unknown predicate/arity is rejected (reported, not used).
+
+predicates:
+  # ---- access / identity ----
+  - {name: session,        arity: 2, means: "we hold a session at ROLE for the app",           ex: [session, attacker, admin]}
+  - {name: have_cred,      arity: 1, means: "we possess a credential/secret token",             ex: [have_cred, support_api_key]}
+  - {name: cred_grants,    arity: 2, means: "credential authenticates at ROLE",                 ex: [cred_grants, support_api_key, support]}
+  - {name: cred_reused_on, arity: 2, means: "the same secret is valid as an OS/service login for USER", ex: [cred_reused_on, db_pw, postgres]}
+  - {name: account,        arity: 2, means: "a target account exists at ROLE",                  ex: [account, admin_user, admin]}
+
+  # ---- AI agents ----
+  - {name: agent,          arity: 1, means: "an AI agent/assistant exists in the app",          ex: [agent, sysmind]}
+  - {name: llm_echoes,     arity: 1, means: "the agent will echo/leak its own context if asked", ex: [llm_echoes, kernelgate]}
+  - {name: input_to_llm,   arity: 2, means: "we control an input CHANNEL reaching that agent",   ex: [input_to_llm, kernelgate, resume_field]}
+  - {name: carries_secret, arity: 2, means: "the agent holds a secret CRED in its context",      ex: [carries_secret, kernelgate, support_api_key]}
+  - {name: agent_role,     arity: 2, means: "the agent is callable at ROLE",                    ex: [agent_role, sysmind, admin]}
+  - {name: has_tool,       arity: 2, means: "the agent has a capability tool (file_read/rce/role_change)", ex: [has_tool, sysmind, file_read]}
+
+  # ---- web app tools / SQLi ----
+  - {name: tool,           arity: 2, means: "an app endpoint/tool T is callable at ROLE",        ex: [tool, search_message, support]}
+  - {name: db_backed,      arity: 1, means: "tool T queries a database",                        ex: [db_backed, search_message]}
+  - {name: injectable,     arity: 1, means: "tool T passes our input unsanitized into SQL",      ex: [injectable, search_message]}
+  - {name: db_read,        arity: 1, means: "we can read arbitrary DB data through T",           ex: [db_read, search_message]}
+  - {name: db_table,       arity: 1, means: "a DB table exists",                                ex: [db_table, reset_tokens]}
+  - {name: table_readable, arity: 1, means: "we can read that table's rows",                     ex: [table_readable, reset_tokens]}
+  - {name: db_engine,      arity: 1, means: "the DB engine in use",                             ex: [db_engine, mysql]}
+  - {name: file_priv,      arity: 1, means: "DB user has FILE privilege (for LOAD_FILE)",        ex: [file_priv, "true"]}
+  - {name: reset_flow,     arity: 0, means: "forgot-password + reset-password endpoints exist",  ex: [reset_flow]}
+
+  # ---- web endpoints ----
+  - {name: endpoint,               arity: 1, means: "an HTTP endpoint exists",                  ex: [endpoint, "/api/download"]}
+  - {name: serves_file_by_param,   arity: 1, means: "endpoint returns a file named by a param", ex: [serves_file_by_param, "/api/download"]}
+  - {name: no_path_canonicalization, arity: 1, means: "endpoint does not canonicalize the path (traversal)", ex: [no_path_canonicalization, "/api/download"]}
+  - {name: renders_user_input,     arity: 1, means: "endpoint renders our input through a template", ex: [renders_user_input, "/preview"]}
+  - {name: template_engine,        arity: 2, means: "endpoint uses template ENGINE (jinja/twig)", ex: [template_engine, "/preview", jinja]}
+  - {name: accepts_role_field,     arity: 1, means: "endpoint trusts a client-supplied role field (mass-assignment)", ex: [accepts_role_field, "/api/register"]}
+  # ---- distilled gates (from Payloads-All-The-Things, reviewed) ----
+  - {name: ldap_injectable,        arity: 1, means: "tool T builds an LDAP query from unsanitized input",   ex: [ldap_injectable, login]}
+  - {name: nosql_injectable,       arity: 1, means: "tool T builds a NoSQL query from unsanitized input (operator injection)", ex: [nosql_injectable, login]}
+  - {name: insecure_deserialization, arity: 1, means: "tool T deserializes attacker-controlled data unsafely", ex: [insecure_deserialization, session_cookie]}
+  - {name: has_gadget,             arity: 2, means: "tool T has an exploitable gadget for OUTCOME (e.g. rce) via prototype pollution / deserialization", ex: [has_gadget, api, rce]}
+  - {name: xxe_vulnerable,         arity: 1, means: "endpoint E parses XML with external entities enabled", ex: [xxe_vulnerable, "/api/import"]}
+  - {name: vuln_present,           arity: 2, means: "endpoint/service E is running vulnerable PRODUCT (name+version)", ex: [vuln_present, "/", "drupal_7.57"]}
+
+  # ---- OS / files / privesc ----
+  - {name: runs_as,        arity: 2, means: "process/agent/endpoint PROC runs as OS USER",       ex: [runs_as, sysmind, webappuser]}
+  - {name: can_read,       arity: 2, means: "OS USER is permitted to read FILE",                ex: [can_read, webappuser, "/secret_data.txt"]}
+  - {name: rce_as,         arity: 1, means: "we can execute commands as USER",                  ex: [rce_as, "www-data"]}
+  - {name: shell_interpolates, arity: 2, means: "tool builds a shell string from our input as USER", ex: [shell_interpolates, ping_tool, root]}
+  - {name: file,           arity: 1, means: "a target file exists on disk",                     ex: [file, "/root/proof.txt"]}
+  - {name: suid_binary,    arity: 2, means: "BIN is SUID owned by OWNER",                       ex: [suid_binary, find, root]}
+  - {name: can_sudo,       arity: 2, means: "USER may run BIN via sudo",                        ex: [can_sudo, "www-data", vim]}
+  - {name: writable_dir,   arity: 2, means: "USER can write to DIR",                            ex: [writable_dir, "www-data", "/tmp"]}
+  - {name: reads_path_from, arity: 2, means: "PROC reads a path out of DIR (symlink bridge)",    ex: [reads_path_from, backup_job, "/tmp"]}
+  - {name: gtfobin,        arity: 3, means: "(loaded from knowledge) BIN offers FUNCTION under CONTEXT", ex: [gtfobin, find, file-read, suid]}
+  - {name: known_exploit,  arity: 2, means: "a public exploit exists for PRODUCT (CVE or edb id)", ex: [known_exploit, "drupal_7.57", "CVE-2018-7600"]}
+
+  # ---- Active Directory (BloodHound-aligned) ----
+  # STATE we can reach:
+  - {name: controls_principal, arity: 1, means: "we can authenticate/act AS principal P (we hold its password, hash, or ticket, or wield a group's edges)", ex: [controls_principal, alice]}
+  - {name: pwn_host,       arity: 1, means: "we have admin code-execution on host H",       ex: [pwn_host, WKSTN01]}
+  - {name: has_hash,       arity: 1, means: "we hold principal P's NT hash (pass-the-hash / crackable)", ex: [has_hash, svc_sql]}
+  - {name: has_ticket,     arity: 1, means: "we hold a usable Kerberos ticket for principal P", ex: [has_ticket, DC01$]}
+  - {name: crackable_hash, arity: 1, means: "we captured a crackable hash for P (roast output), not yet cracked", ex: [crackable_hash, svc_sql]}
+  # GRAPH facts (from recon / BloodHound collection):
+  - {name: principal,      arity: 2, means: "an AD principal P of TYPE (user|computer|group)", ex: [principal, alice, user]}
+  - {name: member_of,      arity: 2, means: "principal P is a (direct) member of group G",   ex: [member_of, alice, Devs]}
+  - {name: admin_to,       arity: 2, means: "principal P is a local admin on host H",         ex: [admin_to, Devs, WKSTN01]}
+  - {name: has_session,    arity: 2, means: "principal P has a harvestable session on host H", ex: [has_session, WKSTN01, svc_admin]}
+  - {name: controls_ace,   arity: 3, means: "principal P holds ACL RIGHT over target T (GenericAll|GenericWrite|WriteDacl|Owns|ForceChangePassword|AddMember|WriteSPN|AddKeyCredentialLink)", ex: [controls_ace, Devs, Helpdesk, AddMember]}
+  - {name: dcsync_rights,  arity: 1, means: "principal P can DCSync the domain (GetChanges+GetChangesAll)", ex: [dcsync_rights, svc_admin]}
+  - {name: kerberoastable, arity: 1, means: "user principal P has an SPN (Kerberoastable)",   ex: [kerberoastable, svc_sql]}
+  - {name: asreproastable, arity: 1, means: "principal P has DONT_REQ_PREAUTH (AS-REP roastable)", ex: [asreproastable, svc_legacy]}
+  - {name: unconstrained_deleg, arity: 1, means: "host H is trusted for unconstrained delegation", ex: [unconstrained_deleg, WEB01]}
+  - {name: allowed_to_act, arity: 2, means: "principal P is in host H's msDS-AllowedToActOnBehalfOfOtherIdentity (RBCD configured)", ex: [allowed_to_act, svc_web, FILES01]}
+  - {name: coercible,      arity: 1, means: "host H's machine-account authentication can be coerced (PrinterBug/PetitPotam)", ex: [coercible, DC01]}
+  - {name: is_dc,          arity: 1, means: "host H is a domain controller",                  ex: [is_dc, DC01]}
+  - {name: domain_admin,   arity: 1, means: "principal P is a domain admin (or equivalent)",  ex: [domain_admin, Administrator]}
+  - {name: constrained_deleg_to, arity: 2, means: "principal P is configured for (constrained) delegation to a service on host H", ex: [constrained_deleg_to, svc_web, FILES01]}
+  # ADCS / certificate-based (Certipy/Certified-Pre-Owned aligned):
+  - {name: ca,             arity: 1, means: "an AD CS Enterprise Certificate Authority exists", ex: [ca, CorpCA]}
+  - {name: cert_template,  arity: 2, means: "certificate template T is published on CA",       ex: [cert_template, UserAuth, CorpCA]}
+  - {name: can_enroll,     arity: 2, means: "principal P is allowed to enroll in template T",   ex: [can_enroll, bob, UserAuth]}
+  - {name: template_esc1,  arity: 1, means: "template T lets the enrollee supply the SAN and has a client-auth (or Any) EKU (ESC1)", ex: [template_esc1, UserAuth]}
+  - {name: ca_esc8,        arity: 1, means: "CA exposes an HTTP/RPC enrollment endpoint vulnerable to NTLM relay (ESC8)", ex: [ca_esc8, CorpCA]}
+  - {name: has_cert,       arity: 1, means: "we hold a certificate that authenticates as principal P (PKINIT)", ex: [has_cert, Administrator]}
+  # ADCS extended ESC gates (added 2026-08-21). Each is a SPECIFIC observable Certipy/certutil reports:
+  - {name: template_client_auth, arity: 1, means: "enrollable template T publishes a client-authentication EKU (Client Authentication / Smart Card Logon / PKINIT / Any Purpose) but does NOT itself let the enrollee supply the SAN (SAN control must come from the CA flag or dNSHostName; used by ESC6/Certifried)", ex: [template_client_auth, Machine]}
+  - {name: template_esc2,  arity: 1, means: "template T has Any-Purpose or no (SubCA) EKU AND allows the enrollee to supply the subject/SAN (CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT) (ESC2)", ex: [template_esc2, SubCA]}
+  - {name: template_esc3,  arity: 1, means: "template T has the Certificate Request Agent EKU (enrollment-agent template) (ESC3 step 1)", ex: [template_esc3, EnrollAgent]}
+  - {name: template_enrollagent_target, arity: 1, means: "template T is a client-auth template whose issuance requires/accepts an enrollment-agent (on-behalf-of) signature (ESC3 step 2 target)", ex: [template_enrollagent_target, User]}
+  - {name: ca_esc6,        arity: 1, means: "CA has the EDITF_ATTRIBUTESUBJECTALTNAME2 flag set, so a SAN can be supplied in ANY request regardless of template (ESC6)", ex: [ca_esc6, CorpCA]}
+  - {name: ca_esc11,       arity: 1, means: "CA's RPC certificate enrollment (ICertPassage/ICPR) does not enforce packet privacy (IF_ENFORCEENCRYPTICERTREQUEST unset), so unsigned NTLM can be relayed to it (ESC11)", ex: [ca_esc11, CorpCA]}
+  - {name: certifried_vuln, arity: 1, means: "CA is unpatched for CVE-2022-26923 (no strong certificate mapping / KB5014754 not enforced), so a spoofed machine dNSHostName in the SAN authenticates as another machine", ex: [certifried_vuln, CorpCA]}
+  - {name: can_add_computer, arity: 1, means: "principal P can create/join computer accounts (ms-DS-MachineAccountQuota > 0 or delegated CreateChild on computers)", ex: [can_add_computer, bob]}
+  # ---- AD object-control abuse (BloodHound edges; added 2026-08-21) ----
+  - {name: gpo_linked_to,  arity: 2, means: "Group Policy Object G is linked to (applies to the computers in) host/OU H", ex: [gpo_linked_to, DefaultPolicy, WKSTN01]}
+  # (LAPS/gMSA/GPO/CA control reuse controls_ace with the right values ReadLAPSPassword | ReadGMSAPassword | ManageCA)
+
+  # ---- MSSQL (linked servers / xp_cmdshell; HackTricks + PayloadsAllTheThings; added 2026-08-21) ----
+  - {name: mssql_login,    arity: 1, means: "we can authenticate to the MSSQL instance on host H (as some login)", ex: [mssql_login, SQL01]}
+  - {name: mssql_sysadmin, arity: 1, means: "our effective login on the MSSQL instance on host H holds the sysadmin server role", ex: [mssql_sysadmin, SQL01]}
+  - {name: mssql_linked,   arity: 2, means: "a linked server from the MSSQL instance on host SRC to the instance on host DST exists whose remote login context is privileged (sysadmin) on DST", ex: [mssql_linked, SQL01, SQL02]}
+
+  # ---- goal predicates (what a target's goal is usually phrased as) ----
+  - {name: read_file,      arity: 1, means: "GOAL/derived: we can read the contents of FILE", ex: [read_file, "/secret_data.txt"]}
+  # also common goals: session(attacker, ROLE) | rce_as(USER) | pwn_host(DC) | controls_principal(DA)

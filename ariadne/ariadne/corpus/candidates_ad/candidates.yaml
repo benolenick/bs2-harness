@@ -1,0 +1,173 @@
+operators:
+- name: dcsync-extract-secrets
+  desc: Extract domain controller secrets using DCSync requiring domain admin privileges.
+  cost: 4
+  tags: [ad, dcsync, kerberos]
+  refs: [MITRE-T1003.006, 'https://attack.stealthbits.com/privilege-escalation-using-mimikatz-dcsync']
+  pre:
+  - [controls_principal, '?u']
+  - [domain_admin, '?u']
+  post:
+  - [has_hash, '?hash']
+  - [has_ticket, '?krbtgt_key']
+- name: lsass-hash-extraction
+  desc: Extract NT hashes from LSASS memory if admin access is present.
+  cost: 3
+  tags: [windows, credential-access]
+  refs: [CWE-287, CWE-250]
+  pre:
+  - [pwn_host, '?h']
+  post:
+  - [has_hash, '?u']
+- name: lsass-ticket-extraction
+  desc: Extract Kerberos tickets from LSASS memory if admin access is present.
+  cost: 3
+  tags: [windows, credential-access]
+  refs: [CWE-287, CWE-250]
+  pre:
+  - [pwn_host, '?h']
+  post:
+  - [has_ticket, '?u']
+- name: impersonate-rce
+  desc: Use a credential to impersonate a principal and execute commands as them.
+  cost: 2
+  tags: [ad, rce]
+  refs: [CWE-287, CWE-250]
+  pre:
+  - [controls_principal, '?p']
+  - [has_hash, '?p']
+  - [principal, '?p', user]
+  post:
+  - [rce_as, '?p']
+- name: impersonate-powershell
+  desc: Use a credential to create a PowerShell credential object and execute processes as the target user.
+  cost: 3
+  tags: [ad, rce]
+  refs: [CWE-287, CWE-250]
+  pre:
+  - [controls_principal, '?p']
+  - [has_hash, '?p']
+  - [principal, '?p', user]
+  - [session, attacker, local]
+  post:
+  - [rce_as, '?p']
+- name: add-member-to-group
+  desc: Add a user to a group using AddMember ACE rights
+  cost: 2
+  tags: [ad, priv-escalation]
+  refs: ['https://github.com/CravateRouge/bloodyAD']
+  pre:
+  - [controls_ace, '?p', '?g', AddMember]
+  - [controls_principal, '?p']
+  post:
+  - [member_of, '?u', '?g']
+- name: force-change-password
+  desc: Change target user's password using ACE rights to gain control
+  cost: 3
+  tags: [ad, password-reset]
+  refs: [CWE-287, CWE-250]
+  pre:
+  - [controls_ace, '?u', '?target', User-Force-Change-Password]
+  post:
+  - [controls_principal, '?target']
+- name: dcsync-ace-grant
+  desc: Grant DCSync rights by adding an ACE with DS-Replication-Get-Changes and DS-Replication-Get-Changes-All.
+  cost: 3
+  tags: [ad, dcsync, acl]
+  refs: ['http://www.harmj0y.net/blog/redteaming/abusing-active-directory-permissions-with-powerview/', 'https://www.ired.team/offensive-security-experiments/active-directory-kerberos-abuse/dump-password-hashes-from-domain-controller-with-dcsync']
+  pre:
+  - [controls_principal, '?p']
+  - [controls_ace, '?p', '?t', WriteDacl]
+  post:
+  - [dcsync_rights, '?p']
+- name: full-control-ace-grant
+  desc: Grant full control (GenericAll) over a target object by adding an ACE with WriteDacl.
+  cost: 3
+  tags: [ad, acl, privilege-escalation]
+  refs: ['http://www.harmj0y.net/blog/redteaming/abusing-active-directory-permissions-with-powerview/', 'https://www.ired.team/offensive-security-experiments/active-directory-kerberos-abuse/dump-password-hashes-from-domain-controller-with-dcsync']
+  pre:
+  - [controls_principal, '?p']
+  - [controls_ace, '?p', '?t', WriteDacl]
+  post:
+  - [controls_ace, '?p', '?t', GenericAll]
+- name: asreproast-hash-capture
+  desc: Capture a crackable hash from a user with Kerberos preauth disabled.
+  cost: 2
+  tags: [kerberos, hash, asreproast]
+  refs: [CWE-287]
+  pre:
+  - [asreproastable, '?p']
+  - [principal, '?p', user]
+  post:
+  - [crackable_hash, '?p']
+- name: rbcd-configure
+  desc: Configure RBCD by modifying the allowed_to_act attribute of a target computer account.
+  cost: 3
+  tags: [ad, rbcd]
+  refs: [CWE-807, CVE-2020-16996]
+  pre:
+  - [controls_principal, '?a']
+  - [principal, '?t', computer]
+  post:
+  - [allowed_to_act, '?a', '?t']
+- name: rbcd-impersonate
+  desc: Impersonate a user via RBCD using a configured allowed_to_act entry.
+  cost: 3
+  tags: [ad, rbcd]
+  refs: [CWE-807, CVE-2020-16996]
+  pre:
+  - [allowed_to_act, '?a', '?t']
+  - [controls_principal, '?a']
+  post:
+  - [controls_principal, '?u']
+- name: unconstrained-delegation-ptt
+  desc: Capture a TGT from a coerced unconstrained delegation host to control its principal.
+  cost: 3
+  tags: [kerberos, delegation, ptt]
+  refs: []
+  pre:
+  - [unconstrained_deleg, '?h']
+  - [coercible, '?h']
+  post:
+  - [controls_principal, '?u']
+- name: s4u2self-admin
+  desc: Use a captured TGT to gain local admin access via S4U2self abuse.
+  cost: 2
+  tags: [kerberos, delegation, s4u2self]
+  refs: []
+  pre:
+  - [controls_principal, '?u']
+  - [domain_admin, '?u']
+  post:
+  - [admin_to, '?u', '?h']
+- name: kerberoast-hash
+  desc: Request and obtain a kerberoastable hash for a service account.
+  cost: 3
+  tags: [kerberos, hash]
+  refs: [CWE-250, CWE-287]
+  pre:
+  - [controls_principal, '?p']
+  - [kerberoastable, '?s']
+  - [account, '?s', service]
+  post:
+  - [read_file, '?hash_file']
+- name: pass-the-ticket
+  desc: Inject a Kerberos ticket to control a principal
+  cost: 2
+  tags: [kerberos, pivotal]
+  refs: [MITRE-T1550.003, CWE-287]
+  pre:
+  - [has_ticket, '?t']
+  - [controls_principal, '?p']
+  post:
+  - [controls_principal, '?p']
+- name: domain-admin-rce
+  desc: Use domain admin ticket to execute as admin
+  cost: 3
+  tags: [kerberos, rce]
+  refs: [MITRE-T1550.003, CWE-78]
+  pre:
+  - [controls_principal, '?p']
+  - [domain_admin, '?p']
+  post:
+  - [rce_as, '?p']

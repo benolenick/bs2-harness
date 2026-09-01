@@ -1,0 +1,25 @@
+# PhantomKernel MID-recon: we've confirmed the support->admin takeover chain (key leak via
+# KernelGate, search_message SQLi, reset_tokens -> admin). We can see SysMind is an
+# admin-tier agent. We have NOT yet discovered the Task-6 mechanism: does SysMind have a
+# file-read tool, and does it run as a user that can read /secret_data.txt?
+name: phantomkernel_mid
+goal: [read_file, "/secret_data.txt"]
+facts:
+  - [file, "/secret_data.txt"]
+  - [agent, kernelgate]
+  - [llm_echoes, kernelgate]
+  - [input_to_llm, kernelgate, resume_upload]
+  - [carries_secret, kernelgate, support_api_key]
+  - [cred_grants, support_api_key, support]
+  - [tool, search_message, support]
+  - [db_backed, search_message]
+  - [injectable, search_message]
+  - [db_table, reset_tokens]
+  - [reset_flow]
+  - [account, admin_user, admin]
+  - [agent, sysmind]
+  - [agent_role, sysmind, admin]
+negatives:
+  - [can_read, uid999, "/secret_data.txt"]
+  - [file_priv, "true"]
+notes: Mid recon. Task-6 mechanism still unknown.

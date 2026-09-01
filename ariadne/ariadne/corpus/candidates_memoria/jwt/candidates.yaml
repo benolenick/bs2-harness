@@ -1,0 +1,91 @@
+operators:
+- name: jwt-alg-confusion
+  desc: Forge JWT with alg:none to bypass signature validation and gain unauthorized
+    access.
+  cost: 2
+  tags:
+  - auth
+  - jwt
+  refs:
+  - CWE-522
+  - CWE-347
+  pre:
+  - - endpoint
+    - ?e
+  - - jwt_trust_alg
+    - ?e
+  post:
+  - - session
+    - attacker
+    - admin
+  source: memoria:jwt:rel0.87
+  connects: true
+  new_preds_used:
+  - jwt_trust_alg
+- name: jwt-alg-none
+  desc: Forge a JWT by setting alg to none if the system does not validate it.
+  cost: 2
+  tags:
+  - auth
+  - jwt
+  refs:
+  - CWE-311
+  - CWE-287
+  pre:
+  - - tool
+    - ?t
+    - ?role
+  - - jwt_alg_none_allowed
+    - ?t
+  post:
+  - - have_cred
+    - ?token
+  - - cred_grants
+    - ?token
+    - ?role
+  source: memoria:jwt:rel0.86
+  connects: true
+  new_preds_used:
+  - jwt_alg_none_allowed
+- name: jwt-hs256-crack
+  desc: Crack a HS256 JWT secret using hashcat or jwt_t if the secret is weak.
+  cost: 3
+  tags:
+  - auth
+  - jwt
+  refs:
+  - CWE-311
+  - CWE-287
+  pre:
+  - - have_cred
+    - ?token
+  - - jwt_hs256
+    - ?token
+  post:
+  - - have_cred
+    - ?secret
+  source: memoria:jwt:rel0.86
+  connects: true
+  new_preds_used:
+  - jwt_hs256
+- name: host-header-ssrf
+  desc: Exploit Host Header Injection to perform SSRF and read internal files.
+  cost: 3
+  tags:
+  - web
+  - ssrf
+  refs:
+  - CWE-1198
+  - OWASP-A03
+  pre:
+  - - endpoint
+    - ?e
+  - - host_header_injectable
+    - ?e
+  post:
+  - - read_file
+    - ?file
+  source: memoria:jwt:rel0.86
+  connects: true
+  new_preds_used:
+  - host_header_injectable

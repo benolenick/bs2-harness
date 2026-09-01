@@ -1,0 +1,57 @@
+# PhantomKernel (HTB COAE) encoded as an Ariadne fact-graph.
+# This is exactly what we knew about the box. The goal is to read /secret_data.txt.
+# The planner should thread: prompt-injection -> support -> SQLi -> admin -> SysMind read,
+# and should PRUNE the OS-RCE and LOAD_FILE branches via the confirmed negatives.
+
+name: phantomkernel
+
+goal: [read_file, "/secret_data.txt"]
+
+facts:
+  # --- the target file ---
+  - [file, "/secret_data.txt"]
+  - [can_read, webappuser, "/secret_data.txt"]     # 0640 root:webappuser -> webappuser CAN read
+
+  # --- KernelGate resume-screener leaks the support key (Task 4) ---
+  - [agent, kernelgate]
+  - [llm_echoes, kernelgate]
+  - [input_to_llm, kernelgate, resume_upload]
+  - [carries_secret, kernelgate, support_api_key]
+  - [cred_grants, support_api_key, support]
+
+  # --- support-tier SQLi surface (search_message) ---
+  - [tool, search_message, support]
+  - [db_backed, search_message]
+  - [injectable, search_message]
+  - [db_engine, mysql]
+  - [db_table, reset_tokens]
+  - [db_table, users]
+
+  # --- password-reset takeover path to admin (Task 5) ---
+  - [reset_flow]
+  - [account, admin_user, admin]
+
+  # --- SysMind admin agent with a real file-read tool (Task 6 mechanism) ---
+  - [agent, sysmind]
+  - [agent_role, sysmind, admin]
+  - [has_tool, sysmind, file_read]
+  - [runs_as, sysmind, webappuser]
+
+  # --- MCP command-injection RCE, but as the wrong user (Task 7 / red herring for T6) ---
+  - [tool, newsletter_export, support]
+  - [shell_interpolates, newsletter_export, uid999]
+  - [rce_as, uid999]
+  - [writable_dir, uid999, "/tmp"]
+
+negatives:
+  # uid999 provably CANNOT read the 0640 file (cp -> Permission denied). Kills os-rce-file-read.
+  - [can_read, uid999, "/secret_data.txt"]
+  # MySQL FILE read is disabled (secure_file_priv=NULL). Kills sqli-load-file.
+  - [file_priv, "true"]
+  # No process reads attacker-writable dirs; the app never reads from /tmp. Weakens symlink-bridge.
+  - [reads_path_from, flask_app, "/tmp"]
+
+notes: >
+  Encodes what recon established. The winning path (agent-file-read via SysMind at admin)
+  should ground out entirely in facts (0 assumptions). The OS-RCE, LOAD_FILE and
+  symlink-bridge branches should be pruned or heavily penalised by the negatives.

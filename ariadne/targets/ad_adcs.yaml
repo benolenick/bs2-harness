@@ -1,0 +1,17 @@
+# Authenticated as low-priv bob. An ADCS template (UserAuth on CorpCA) is ESC1-vulnerable
+# and bob can enroll. Goal: own the DC by minting a cert for a domain admin.
+name: ad_adcs
+goal: [pwn_host, DC01]
+facts:
+  - [controls_principal, bob]
+  - [principal, bob, user]
+  - [ca, CorpCA]
+  - [cert_template, UserAuth, CorpCA]
+  - [template_esc1, UserAuth]
+  - [can_enroll, bob, UserAuth]
+  - [principal, Administrator, user]
+  - [domain_admin, Administrator]
+  - [admin_to, Administrator, DC01]
+  - [is_dc, DC01]
+negatives: []
+notes: ESC1 -> cert for Administrator -> PKINIT auth -> admin on DC.

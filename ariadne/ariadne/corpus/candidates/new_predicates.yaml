@@ -1,0 +1,18 @@
+predicates:
+- name: can_include_remote
+  arity: 1
+  means: The OS user can include remote files via the application (e.g., allow_url_include
+    is enabled).
+- name: ldap_injectable
+  arity: 1
+  means: Tool ?t is vulnerable to LDAP injection due to unsanitized user input in
+    query construction.
+- name: accepts_json_input
+  arity: 1
+  means: the endpoint accepts JSON input and processes it unsafely
+- name: has_gadget
+  arity: 2
+  means: the tool has a known gadget that can be exploited for RCE via prototype pollution
+- name: xxe_vulnerable
+  arity: 1
+  means: The endpoint is vulnerable to XML External Entity attacks.

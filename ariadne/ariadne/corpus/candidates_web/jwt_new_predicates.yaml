@@ -1,0 +1,16 @@
+# New OBSERVABLE predicates for the re-gated JWT operators (candidates_web/jwt_regated.yaml).
+# Each is something recon/token-analysis confirms about a verifier or a captured token —
+# never an action outcome.
+predicates:
+- name: jwt_alg_none_allowed
+  arity: 1
+  means: the verifier reachable via tool T accepts a JWT with alg:none (unsigned token) as valid
+- name: jwt_alg_confusable
+  arity: 1
+  means: the verifier via tool T does not pin the signature algorithm, so a caller-chosen alg (e.g. HS256 in place of RS256) is honored
+- name: jwt_hs256_weak
+  arity: 1
+  means: captured token T is HS256-signed AND its secret is confirmed to lie in a crackable space (wordlist/short) — not merely "uses HS256"
+- name: jwt_key_trusted
+  arity: 2
+  means: the verifier via tool T accepts tokens signed by signing-key K (K is a trusted/leaked/recovered signing key for that verifier)

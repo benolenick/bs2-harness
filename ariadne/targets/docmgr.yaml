@@ -1,0 +1,12 @@
+# Consistent XXE demo (extractor aliased the endpoint; corrected by hand).
+name: docmgr
+goal: [read_file, "/etc/docmgr/secrets.env"]
+facts:
+  - [session, attacker, user]
+  - [endpoint, "/api/import"]
+  - [xxe_vulnerable, "/api/import"]
+  - [runs_as, "/api/import", docsvc]
+  - [file, "/etc/docmgr/secrets.env"]
+  - [can_read, docsvc, "/etc/docmgr/secrets.env"]
+negatives: []
+notes: XXE file-read demo for the distilled xxe-file-read operator.

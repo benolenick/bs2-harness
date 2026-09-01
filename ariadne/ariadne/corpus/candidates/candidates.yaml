@@ -1,0 +1,241 @@
+operators:
+- name: argument-injection-rce
+  desc: Inject and execute arbitrary commands through a tool's argument parsing mechanism.
+  cost: 3
+  tags: [web, rce]
+  refs: [CWE-78, CWE-707]
+  pre:
+  - [tool, '?t', '?role']
+  - [session, attacker, '?role']
+  - [shell_interpolates, '?t', '?u']
+  post:
+  - [rce_as, '?u']
+- name: file-write-then-read
+  desc: Write a file to a writable directory and read it via RCE.
+  cost: 2
+  tags: [web, file]
+  refs: [CWE-22, CWE-288]
+  pre:
+  - [rce_as, '?u']
+  - [writable_dir, '?u', '?dir']
+  post:
+  - [read_file, '?file']
+- name: rfi-remote-inclusion
+  desc: Exploit remote file inclusion by leveraging an endpoint that accepts remote URLs.
+  cost: 3
+  tags: [web, rfi]
+  refs: [CWE-78, CWE-22]
+  pre:
+  - [endpoint, '?e']
+  - [serves_file_by_param, '?e']
+  - [no_path_canonicalization, '?e']
+  - [runs_as, '?e', '?u']
+  - [can_include_remote, '?u']
+  post:
+  - [read_file, '?remote_file']
+- name: deserialization-rce
+  desc: Exploit insecure deserialization to achieve RCE as user ?u
+  cost: 3
+  tags: [web, rce]
+  refs: [CWE-502]
+  pre:
+  - [tool, '?t', '?role']
+  - [session, attacker, '?role']
+  - [runs_as, '?t', '?u']
+  post:
+  - [rce_as, '?u']
+- name: deserialization-file-read
+  desc: Exploit insecure deserialization to read arbitrary file ?file
+  cost: 3
+  tags: [web, file-read]
+  refs: [CWE-502]
+  pre:
+  - [tool, '?t', '?role']
+  - [session, attacker, '?role']
+  - [can_read, '?u', '?file']
+  - [runs_as, '?t', '?u']
+  post:
+  - [read_file, '?file']
+- name: ldap-auth-bypass
+  desc: Bypass LDAP authentication by injecting always-true conditions to gain admin session.
+  cost: 3
+  tags: [ldap, auth-bypass]
+  refs: [CWE-20, CWE-798]
+  pre:
+  - [tool, '?t', '?role']
+  - [session, attacker, '?role']
+  - [ldap_injectable, '?t']
+  post:
+  - [session, attacker, admin]
+- name: ldap-blind-credential-extraction
+  desc: Extract credentials via blind LDAP injection by analyzing response differences.
+  cost: 3
+  tags: [ldap, credential-extraction]
+  refs: [CWE-20, CWE-798]
+  pre:
+  - [tool, '?t', '?role']
+  - [session, attacker, '?role']
+  - [ldap_injectable, '?t']
+  post:
+  - [have_cred, '?secret']
+- name: nosql-auth-bypass
+  desc: Bypass authentication using $ne or $regex operators in NoSQL queries.
+  cost: 3
+  tags: [web, auth-bypass, nosql]
+  refs: [CWE-89, CWE-78]
+  pre:
+  - [tool, '?t', '?role']
+  - [session, attacker, '?role']
+  - [accepts_role_field, '?t']
+  post:
+  - [session, attacker, admin]
+- name: nosql-data-extraction
+  desc: Extract data using $regex operator to infer field contents in NoSQL queries.
+  cost: 3
+  tags: [web, data-extraction, nosql]
+  refs: [CWE-89, CWE-78]
+  pre:
+  - [tool, '?t', '?role']
+  - [session, attacker, '?role']
+  - [db_backed, '?t']
+  - [injectable, '?t']
+  post:
+  - [db_read, '?t']
+- name: json-prototype-rce
+  desc: Exploit JSON input to pollute Object.prototype and achieve RCE.
+  cost: 3
+  tags: [web, rce]
+  refs: [CWE-78, CWE-20]
+  pre:
+  - [endpoint, '?e']
+  - [accepts_json_input, '?e']
+  - [runs_as, '?e', '?u']
+  post:
+  - [rce_as, '?u']
+- name: gadget-prototype-rce
+  desc: Leverage a prototype pollution gadget in a JSON-parsing tool to achieve RCE.
+  cost: 4
+  tags: [web, rce]
+  refs: [CWE-78, CWE-20]
+  pre:
+  - [tool, '?t', '?role']
+  - [session, attacker, '?role']
+  - [has_gadget, '?t', rce]
+  - [runs_as, '?t', '?u']
+  post:
+  - [rce_as, '?u']
+- name: sql-injection-auth-bypass
+  desc: Bypass authentication via SQL injection to gain admin session
+  cost: 3
+  tags: [web, sql, auth]
+  refs: [CWE-89, CWE-20]
+  pre:
+  - [tool, '?t', '?role']
+  - [injectable, '?t']
+  - [account, admin_user, admin]
+  post:
+  - [session, attacker, admin]
+- name: sql-injection-file-read
+  desc: Use SQL injection to read files via database FILE privilege
+  cost: 3
+  tags: [web, sql, file-read]
+  refs: [CWE-89, CWE-78]
+  pre:
+  - [tool, '?t', '?role']
+  - [injectable, '?t']
+  - [db_backed, '?t']
+  - [file_priv, 'true']
+  post:
+  - [read_file, '?file']
+- name: ssrf-file-read
+  desc: Use SSRF to read a file on the server by exploiting a file:// URL scheme.
+  cost: 2
+  tags: [ssrf, file-read]
+  refs: [CWE-668]
+  pre:
+  - [endpoint, '?e']
+  - [serves_file_by_param, '?e']
+  - [runs_as, '?e', '?u']
+  - [can_read, '?u', '?file']
+  post:
+  - [read_file, '?file']
+- name: ssrf-rce
+  desc: Use SSRF to achieve remote code execution by exploiting a gopher:// URL scheme.
+  cost: 3
+  tags: [ssrf, rce]
+  refs: [CWE-78]
+  pre:
+  - [endpoint, '?e']
+  - [serves_file_by_param, '?e']
+  - [runs_as, '?e', '?u']
+  - [shell_interpolates, '?e', '?u']
+  post:
+  - [rce_as, '?u']
+- name: ssrf-metadata-leak
+  desc: Use SSRF to access cloud metadata services by exploiting a URL bypass.
+  cost: 2
+  tags: [ssrf, metadata-leak]
+  refs: [CWE-200]
+  pre:
+  - [endpoint, '?e']
+  - [serves_file_by_param, '?e']
+  - [runs_as, '?e', '?u']
+  - [can_read, '?u', '?file']
+  post:
+  - [read_file, '?file']
+- name: ssti-file-read
+  desc: Exploit SSTI to read a file accessible by the endpoint's user.
+  cost: 3
+  tags: [web, ssti, file-read]
+  refs: [CWE-20, CWE-78]
+  pre:
+  - [renders_user_input, '?e']
+  - [template_engine, '?e', '?engine']
+  - [runs_as, '?e', '?u']
+  - [can_read, '?u', '?file']
+  post:
+  - [read_file, '?file']
+- name: file-upload-rce
+  desc: Upload a malicious file that is executed as code by the server, leading to RCE.
+  cost: 3
+  tags: [web, rce]
+  refs: [CWE-78, CWE-89]
+  pre:
+  - [endpoint, '?e']
+  - [runs_as, '?e', '?u']
+  - [file, '?f']
+  post:
+  - [rce_as, '?u']
+- name: imagemagick-rce
+  desc: Exploit ImageMagick vulnerability via uploaded file to achieve RCE.
+  cost: 4
+  tags: [web, rce]
+  refs: [CVE-2016-3714]
+  pre:
+  - [endpoint, '?e']
+  - [known_exploit, imagemagick, CVE-2016-3714]
+  - [runs_as, '?e', '?u']
+  post:
+  - [rce_as, '?u']
+- name: htaccess-rce
+  desc: Upload .htaccess with AddType directive to execute uploaded files as PHP, leading to RCE.
+  cost: 3
+  tags: [web, rce]
+  refs: [CWE-78, CWE-89]
+  pre:
+  - [endpoint, '?e']
+  - [runs_as, '?e', '?u']
+  - [writable_dir, '?u', '?dir']
+  post:
+  - [rce_as, '?u']
+- name: xxe-file-read
+  desc: Exploit XXE vulnerability to read a file by leveraging the XML parser's ability to fetch files.
+  cost: 3
+  tags: [web, xxe, file-read]
+  refs: [CWE-78, CWE-190]
+  pre:
+  - [xxe_vulnerable, '?e']
+  - [runs_as, '?e', '?u']
+  - [can_read, '?u', '?file']
+  post:
+  - [read_file, '?file']

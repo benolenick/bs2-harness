@@ -1,0 +1,7 @@
+predicates:
+- name: cacheable
+  arity: 1
+  means: Endpoint E is cacheable by intermediate proxies or CDNs.
+- name: reflects_headers
+  arity: 1
+  means: Endpoint E reflects HTTP headers in its response.

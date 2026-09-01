@@ -1,0 +1,21 @@
+# A BloodHound-style domain: we control a low-priv user (alice). Goal: own the DC.
+# The only path is member_of -> ACL AddMember -> AdminTo a workstation -> harvest a
+# session -> that account can DCSync -> dump the DA hash -> the DA is admin on the DC.
+name: ad_domain
+goal: [pwn_host, DC01]
+facts:
+  - [controls_principal, alice]
+  - [principal, alice, user]
+  - [member_of, alice, Devs]
+  - [principal, Devs, group]
+  - [controls_ace, Devs, HelpdeskAdmins, AddMember]
+  - [principal, HelpdeskAdmins, group]
+  - [admin_to, HelpdeskAdmins, WKSTN01]
+  - [has_session, WKSTN01, svc_admin]
+  - [principal, svc_admin, user]
+  - [dcsync_rights, svc_admin]
+  - [domain_admin, Administrator]
+  - [admin_to, Administrator, DC01]
+  - [is_dc, DC01]
+negatives: []
+notes: Classic BloodHound path; Ariadne should chain MemberOf/ACL/AdminTo/HasSession/DCSync.

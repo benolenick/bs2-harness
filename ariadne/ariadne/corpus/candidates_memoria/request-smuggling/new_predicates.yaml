@@ -1,0 +1,10 @@
+predicates:
+- name: smuggling_vuln
+  arity: 1
+  means: endpoint E is vulnerable to HTTP request smuggling (CL.TE or TE.CL)
+- name: smuggle_possible
+  arity: 1
+  means: Request smuggling is possible through this endpoint
+- name: te_cl_misconfigured
+  arity: 1
+  means: Endpoint uses Transfer-Encoding while backend uses Content-Length

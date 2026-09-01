@@ -1,0 +1,111 @@
+# Front-facing web operator candidates (WS-C, gunbelt-16/17) — STAGED FOR REVIEW, not merged.
+# The GENERIC bucket from om-b5's 41-trooper taxonomy: OWASP API/Top-10 authz + delivery
+# classes that reduce to source->sink / compare shapes and post to predicates the live corpus
+# already consumes (session, have_cred, db_read, read_file) so they CHAIN into real plans.
+#
+# Review bar (from candidates/REVIEW.md): SOUND (post not stronger than the pre warrants) and
+# tightly GATED (cannot fire on a bare `endpoint` — each needs the SPECIFIC confirmed-vuln
+# observable). The canonical rejection to avoid: an op that fires on any endpoint and
+# fabricates a shortcut past the real chain. Each op below is double-gated accordingly.
+operators:
+
+# ---- Broken Object Level Authorization (BOLA / IDOR) — OWASP API1:2023 -------------------
+- name: bola-object-read
+  desc: Read another principal's records through an endpoint that selects an object by a
+    client-supplied id and performs no ownership check.
+  cost: 2
+  tags: [web, api, access-control]
+  refs: [CWE-639, CWE-284, "OWASP API1:2023 BOLA"]
+  pre:
+  - [endpoint, '?e']
+  - [object_ref_param, '?e']          # gate 1: it takes an object id from us
+  - [missing_object_authz, '?e']      # gate 2: it does NOT check ownership (confirmed)
+  - [session, attacker, '?role']      # we hold SOME session to reach it
+  post:
+  - [db_read, '?e']                   # arbitrary record read -> chains into table/cred ops
+
+# ---- Broken Function Level Authorization (BFLA) — OWASP API5:2023 ------------------------
+- name: bfla-privileged-call
+  desc: Invoke a role-restricted function from a lower-privileged session because the endpoint
+    enforces no function-level authorization.
+  cost: 2
+  tags: [web, api, access-control]
+  refs: [CWE-285, CWE-862, "OWASP API5:2023 BFLA"]
+  pre:
+  - [endpoint, '?e']
+  - [privileged_function, '?e', '?role']   # gate 1: E performs a ROLE-privileged action
+  - [missing_function_authz, '?e']         # gate 2: no role check (confirmed)
+  - [session, attacker, '?low']            # we hold some (lower) session
+  post:
+  - [session, attacker, '?role']           # we now act at ?role -> goal/chain
+
+# ---- Broken Object Property Level Authorization / mass-assignment (BOPLA) — API3:2023 ----
+# NOT INCLUDED: the live corpus already carries `mass-assignment-privesc` with an identical
+# shape (endpoint + accepts_role_field + session -> session(attacker,admin)). BOPLA/mass-
+# assignment is already covered — a duplicate would just be dominated. See REVIEW.md.
+
+# ---- Server-Side Request Forgery -> cloud credential theft — OWASP API7 / A10:2021 -------
+- name: ssrf-cloud-metadata-creds
+  desc: Pivot an SSRF sink into the cloud instance-metadata service to steal the attached
+    role's temporary credentials.
+  cost: 3
+  tags: [web, ssrf, cloud, credential-access]
+  refs: [CWE-918, "OWASP A10:2021 SSRF", "OWASP API7:2023"]
+  pre:
+  - [endpoint, '?e']
+  - [fetches_user_url, '?e']               # gate 1: confirmed server-side fetch of our URL
+  - [cloud_metadata_reachable, '?e']       # gate 2: metadata endpoint actually reachable
+  post:
+  - [have_cred, cloud_iam_role]            # steal IAM creds -> chains to session
+
+# ---- Stored/Reflected XSS -> session theft — OWASP A03:2021 ------------------------------
+- name: xss-session-theft
+  desc: Execute script in a privileged viewer's context to steal their session, acting as
+    that role.
+  cost: 3
+  tags: [web, xss, client-side, session]
+  refs: [CWE-79, "OWASP A03:2021 Injection (XSS)"]
+  pre:
+  - [endpoint, '?e']
+  - [reflects_to_role, '?e', '?role']      # gate 1: our input reaches ROLE's rendered context
+  - [js_executes, '?e']                    # gate 2: script actually runs (CSP/encoding don't stop it)
+  post:
+  - [session, attacker, '?role']
+
+# ---- Sensitive data exposure — OWASP A01/A04 --------------------------------------------
+- name: sensitive-data-exposure-cred
+  desc: Recover a credential/secret returned directly in an endpoint's response.
+  cost: 1
+  tags: [web, info-disclosure, credential-access]
+  refs: [CWE-200, CWE-538, "OWASP A01:2021"]
+  pre:
+  - [endpoint, '?e']
+  - [exposes_secret, '?e']                 # gate: confirmed secret PRESENT in response body
+  post:
+  - [have_cred, '?e']
+
+# ---- Security misconfiguration: default credentials — OWASP A05:2021 --------------------
+- name: default-credentials-login
+  desc: Authenticate with a confirmed default/known credential.
+  cost: 1
+  tags: [web, misconfig, auth]
+  refs: [CWE-1392, CWE-1393, "OWASP A05:2021"]
+  pre:
+  - [endpoint, '?e']
+  - [default_creds, '?e', '?role']         # gate: confirmed default cred at ROLE
+  post:
+  - [session, attacker, '?role']
+
+# ---- Host-header injection -> password-reset poisoning -> account takeover ---------------
+- name: host-header-reset-poison
+  desc: Poison the password-reset link via a reflected Host header to capture a target
+    account's reset token.
+  cost: 3
+  tags: [web, auth, account-takeover]
+  refs: [CWE-640, CWE-644, "OWASP A07:2021"]
+  pre:
+  - [reset_flow]
+  - [host_header_reflected, '?e']          # gate 1: Host reflected into the reset link
+  - [account, '?acct', '?role']            # a target account exists
+  post:
+  - [have_cred, '?acct']                   # we capture that account's reset credential

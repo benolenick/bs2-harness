@@ -1,0 +1,83 @@
+operators:
+- name: cache-poisoning-read
+  desc: Exploit cache poisoning by injecting malicious content via header reflection
+    to read arbitrary files.
+  cost: 3
+  tags:
+  - cache
+  - rce
+  refs:
+  - CWE-78
+  - CWE-200
+  pre:
+  - - reflects_headers
+    - ?e
+  - - cacheable
+    - ?e
+  - - can_read
+    - ?u
+    - ?file
+  post:
+  - - read_file
+    - ?file
+  source: memoria:cache-poisoning:rel0.87
+  connects: true
+  new_preds_used:
+  - cacheable
+  - reflects_headers
+- name: host-header-cache-poisoning
+  desc: Exploit CDN cache by injecting attacker-controlled absolute paths in X-Forwarded-Host
+    header, leading to poisoned responses being served to other users.
+  cost: 3
+  tags:
+  - cdn
+  - cache-poisoning
+  refs:
+  - CWE-79
+  - CWE-113
+  pre:
+  - - endpoint
+    - ?e
+  - - runs_as
+    - ?e
+    - ?u
+  - - can_read
+    - ?u
+    - ?file
+  - - accepts_role_field
+    - ?e
+  post:
+  - - read_file
+    - ?file
+  source: memoria:cache-poisoning:rel0.86
+  connects: true
+  new_preds_used: []
+- name: cdn-poisoned-response-read
+  desc: Leverage poisoned CDN cache to read arbitrary files by forcing the CDN to
+    serve cached content with attacker-controlled paths.
+  cost: 2
+  tags:
+  - cdn
+  - file-read
+  refs:
+  - CWE-79
+  - CWE-113
+  pre:
+  - - endpoint
+    - ?e
+  - - serves_file_by_param
+    - ?e
+  - - no_path_canonicalization
+    - ?e
+  - - runs_as
+    - ?e
+    - ?u
+  - - can_read
+    - ?u
+    - ?file
+  post:
+  - - read_file
+    - ?file
+  source: memoria:cache-poisoning:rel0.86
+  connects: true
+  new_preds_used: []

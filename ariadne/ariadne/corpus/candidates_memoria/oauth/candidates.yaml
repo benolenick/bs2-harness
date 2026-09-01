@@ -1,0 +1,41 @@
+operators:
+- name: open-redirect-capture-cred
+  desc: Exploit an open redirect vulnerability to capture an OAuth authorization code
+    or token.
+  cost: 2
+  tags:
+  - web
+  - oauth
+  refs:
+  - CWE-601
+  pre:
+  - - open_redirect
+    - ?e
+  post:
+  - - have_cred
+    - ?token
+  source: memoria:oauth:rel0.84
+  connects: true
+  new_preds_used:
+  - open_redirect
+- name: oauth-session-takeover
+  desc: Use captured OAuth token to establish a session as the target user.
+  cost: 1
+  tags:
+  - auth
+  - takeover
+  refs:
+  - CWE-287
+  pre:
+  - - have_cred
+    - ?token
+  - - account
+    - ?user
+    - ?role
+  post:
+  - - session
+    - attacker
+    - ?role
+  source: memoria:oauth:rel0.84
+  connects: true
+  new_preds_used: []

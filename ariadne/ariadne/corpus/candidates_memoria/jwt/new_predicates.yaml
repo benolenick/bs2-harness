@@ -1,0 +1,14 @@
+predicates:
+- name: jwt_trust_alg
+  arity: 1
+  means: The endpoint trusts the 'alg' parameter in JWT tokens without validation.
+- name: jwt_alg_none_allowed
+  arity: 1
+  means: the endpoint allows JWTs with alg:none
+- name: jwt_hs256
+  arity: 1
+  means: the JWT uses HS256 algorithm
+- name: host_header_injectable
+  arity: 1
+  means: endpoint E is vulnerable to Host Header Injection, allowing manipulation
+    of the Host header to influence server behavior

@@ -1,0 +1,25 @@
+operators:
+- name: insecure-deserialization-rce
+  desc: Exploit insecure deserialization with a gadget chain to achieve RCE as the
+    user the tool runs as.
+  cost: 3
+  tags:
+  - deserialization
+  - rce
+  refs:
+  - CWE-502
+  pre:
+  - - insecure_deserialization
+    - ?t
+  - - has_gadget
+    - ?t
+    - rce
+  - - runs_as
+    - ?t
+    - ?u
+  post:
+  - - rce_as
+    - ?u
+  source: memoria:deserialization:rel0.87
+  connects: true
+  new_preds_used: []

@@ -1,0 +1,79 @@
+operators:
+- name: saml-xxe-read
+  desc: Exploit XXE in SAML endpoint to read files if server can read them
+  cost: 2
+  tags:
+  - web
+  - xxe
+  refs:
+  - CWE-611
+  pre:
+  - - xxe_vulnerable
+    - ?e
+  - - have_cred
+    - ?cred
+  - - cred_grants
+    - ?cred
+    - ?role
+  - - tool
+    - ?e
+    - ?role
+  - - can_read
+    - ?u
+    - ?file
+  post:
+  - - read_file
+    - ?file
+  source: memoria:saml:rel0.84
+  connects: true
+  new_preds_used: []
+- name: saml-bypass-auth
+  desc: Exploit SAML signature wrapping vulnerability to bypass authentication
+  cost: 3
+  tags:
+  - saml
+  - auth-bypass
+  refs:
+  - CWE-295
+  - CWE-668
+  pre:
+  - - endpoint
+    - ?e
+  - - saml_signature_wrapping_vuln
+    - ?e
+  post:
+  - - session
+    - attacker
+    - ?u
+  source: memoria:saml:rel0.83
+  connects: true
+  new_preds_used:
+  - saml_signature_wrapping_vuln
+- name: host-header-injection-read
+  desc: Exploit Host Header Injection to read arbitrary files by manipulating the
+    Host header to trigger SSRF.
+  cost: 2
+  tags:
+  - web
+  - ssrf
+  refs:
+  - CWE-1129
+  - OWASP WSTG-07.17
+  pre:
+  - - endpoint
+    - ?e
+  - - host_header_injection_vuln
+    - ?e
+  - - runs_as
+    - ?e
+    - ?u
+  - - can_read
+    - ?u
+    - ?file
+  post:
+  - - read_file
+    - ?file
+  source: memoria:saml:rel0.82
+  connects: true
+  new_preds_used:
+  - host_header_injection_vuln

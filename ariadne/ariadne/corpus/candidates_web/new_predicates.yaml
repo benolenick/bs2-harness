@@ -1,0 +1,39 @@
+# New OBSERVABLE predicates for the front-facing web operator batch (WS-C, gunbelt-16/17).
+# Every one is something RECON confirms (a property of an endpoint), never an action outcome —
+# so the planner may treat it as an assumption in the relaxed phase but must ACHIEVE the
+# post (session/have_cred/db_read) by a real chain. Reuse-first: several web classes
+# (BOPLA/mass-assignment, host-header reset) reuse existing predicates and add nothing here.
+predicates:
+- name: object_ref_param
+  arity: 1
+  means: endpoint E selects a record by a client-supplied object identifier (IDOR/BOLA surface)
+- name: missing_object_authz
+  arity: 1
+  means: endpoint E does NOT verify the caller owns / may access the referenced object (confirmed, not assumed)
+- name: privileged_function
+  arity: 2
+  means: endpoint E performs an action reserved for ROLE (admin-only function)
+- name: missing_function_authz
+  arity: 1
+  means: endpoint E enforces no role check before performing its privileged action (BFLA — confirmed)
+- name: fetches_user_url
+  arity: 1
+  means: endpoint E issues a server-side request to a URL taken from our input (SSRF sink)
+- name: cloud_metadata_reachable
+  arity: 1
+  means: the SSRF sink at E can reach the cloud instance metadata service (169.254.169.254 / metadata endpoint responds)
+- name: reflects_to_role
+  arity: 2
+  means: our input to E is rendered unsanitized in a page/context viewed by ROLE (stored/reflected XSS delivery to ROLE)
+- name: js_executes
+  arity: 1
+  means: the reflection context at E actually executes injected script (CSP/encoding do not neutralize it — confirmed)
+- name: exposes_secret
+  arity: 1
+  means: endpoint E returns sensitive material in its response (leaked key/token/backup/config — confirmed present in body)
+- name: default_creds
+  arity: 2
+  means: endpoint E accepts a confirmed default/known credential authenticating at ROLE
+- name: host_header_reflected
+  arity: 1
+  means: endpoint E reflects the client Host header into generated links/emails (reset-link poisoning surface)

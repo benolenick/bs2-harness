@@ -1,0 +1,96 @@
+operators:
+- name: gcp-bucket-read
+  desc: Access a misconfigured GCP Cloud Storage bucket to read arbitrary files
+  cost: 2
+  tags:
+  - cloud
+  - lfi
+  refs:
+  - CWE-22
+  - CWE-78
+  pre:
+  - - endpoint
+    - ?e
+  - - serves_file_by_param
+    - ?e
+  - - no_path_canonicalization
+    - ?e
+  - - runs_as
+    - ?e
+    - ?u
+  - - can_read
+    - ?u
+    - ?file
+  post:
+  - - read_file
+    - ?file
+  source: memoria:cloud-iam:rel0.83
+  connects: true
+  new_preds_used: []
+- name: cloud-function-rce
+  desc: Exploit a vulnerable GCP Cloud Function with unsanitized input for remote
+    code execution
+  cost: 3
+  tags:
+  - cloud
+  - rce
+  refs:
+  - CWE-78
+  - CWE-79
+  pre:
+  - - tool
+    - ?t
+    - ?role
+  - - session
+    - attacker
+    - ?role
+  - - shell_interpolates
+    - ?t
+    - ?u
+  post:
+  - - rce_as
+    - ?u
+  source: memoria:cloud-iam:rel0.83
+  connects: true
+  new_preds_used: []
+- name: iam-role-assume
+  desc: Assume an IAM role using stolen credentials or session tokens to gain its
+    privileges.
+  cost: 3
+  tags:
+  - iam
+  - priv-escalation
+  refs:
+  - AWS-STS-ASSUMEROLE
+  pre:
+  - - have_cred
+    - ?cred
+  - - cred_grants
+    - ?cred
+    - ?role
+  post:
+  - - controls_principal
+    - ?role
+  source: memoria:cloud-iam:rel0.83
+  connects: true
+  new_preds_used: []
+- name: iam-role-escalate
+  desc: Escalate privileges by leveraging assumed IAM role permissions.
+  cost: 2
+  tags:
+  - iam
+  - priv-escalation
+  refs:
+  - CWE-862
+  pre:
+  - - controls_principal
+    - ?role
+  - - account
+    - ?role
+    - admin
+  post:
+  - - rce_as
+    - ?role
+  source: memoria:cloud-iam:rel0.83
+  connects: true
+  new_preds_used: []
