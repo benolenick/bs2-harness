@@ -53,6 +53,12 @@ if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
 HITL = ("--require-hitl" in sys.argv or "--hitl" in sys.argv
         or os.environ.get("BS2_REQUIRE_HITL", "").strip().lower() in ("1", "true", "yes", "on"))
 
+# --json: emit one machine-readable object instead of the human panel, so an AI assistant
+# driving BS2 can parse the health result and surface failures to its operator.
+JSON = "--json" in sys.argv
+if JSON:
+    C = {k: "" for k in C}
+
 OK, WARN, FAIL = "OK", "WARN", "FAIL"
 _MARK = {OK: f"{C['grn']}✔ OK  {C['rst']}", WARN: f"{C['ylw']}▲ WARN{C['rst']}",
          FAIL: f"{C['red']}✖ FAIL{C['rst']}"}
@@ -62,6 +68,8 @@ results = []  # list of (status, name, detail, fix)
 
 def check(status, name, detail="", fix=""):
     results.append((status, name, detail, fix))
+    if JSON:
+        return
     line = f"  {_MARK[status]}  {C['b']}{name}{C['rst']}"
     if detail:
         line += f"  {C['dim']}— {detail}{C['rst']}"
@@ -385,6 +393,47 @@ def check_hitl():
               "run in a terminal: python3 live/broker/bs2_gate.py")
 
 
+def check_scope_env():
+    """The trooper hard-refuses loopback/fleet-LAN targets unless GB_ALLOW_LOOPBACK=1 (a
+    safety guard so an autonomous run can't attack the operator's own box). If someone points
+    BS2 at localhost/127.0.0.1 without it, the recipe floor runs but the AI trooper silently
+    refuses every command — it looks broken. Catch that here."""
+    import re as _re
+    target = os.environ.get("BS2_TARGET", "").strip()
+    if not target:
+        check(WARN, "target", "BS2_TARGET not set — recipe lanes gate on it; export it to the "
+              "host you are authorized to test (unset reads as 'outside scope')", "")
+        return
+    thost = _re.sub(r"^\w+://", "", target).split("/")[0].split(":")[0]
+    allow_tgt = os.environ.get("GB_ALLOW_TARGET", "").strip().lower() in ("1", "true", "yes")
+    allow_lb = os.environ.get("GB_ALLOW_LOOPBACK", "").strip().lower() in ("1", "true", "yes")
+    is_loopback = bool(_re.search(r"^(127\.0\.0\.1|localhost)$", thost))
+    is_lan = bool(_re.search(r"^192\.168\.\d+\.\d+$", thost))
+    if is_loopback:
+        if not (allow_lb or allow_tgt):
+            check(FAIL, "scope-target", f"BS2_TARGET={target} is loopback but neither "
+                  "GB_ALLOW_LOOPBACK nor GB_ALLOW_TARGET is set — the AI trooper will REFUSE "
+                  "every command (recipe floor still runs, so it looks half-broken)",
+                  "export GB_ALLOW_LOOPBACK=1  and  GB_CHARTER_PORTS=<ports, e.g. 8080,3000>")
+        elif not os.environ.get("GB_CHARTER_PORTS", "").strip():
+            check(WARN, "scope-target", "loopback target cleared, but GB_CHARTER_PORTS is unset "
+                  "— set it to the port(s) you're testing so the trooper honors the declared surface",
+                  "export GB_CHARTER_PORTS=8080,3000")
+        else:
+            check(OK, "scope-target", f"loopback target {target} cleared for the AI trooper")
+    elif is_lan:
+        if not allow_tgt:
+            check(FAIL, "scope-target", f"BS2_TARGET={target} is a LAN address the trooper "
+                  "hard-denies by default — the AI leg will REFUSE every command (recipe floor "
+                  "still runs, so it looks half-broken)",
+                  "export GB_ALLOW_TARGET=1  (exempts your declared target; destructive/GPU/VPN "
+                  "denies + the HITL door still apply)")
+        else:
+            check(OK, "scope-target", f"LAN target {target} cleared via GB_ALLOW_TARGET")
+    else:
+        check(OK, "scope-target", f"BS2_TARGET={target} (remote — trooper allows it by default)")
+
+
 # =========================================================================================
 # REPORT
 # =========================================================================================
@@ -413,11 +462,12 @@ def emit_report(sha, when):
 
 
 def main():
-    print(f"\n{C['b']}BS2 doctor{C['rst']} — checking this environment before you run anything\n"
-          f"{C['dim']}repo: {ROOT}{C['rst']}\n")
-    if HITL:
-        print(f"{C['cyn']}mode: HITL-always{C['rst']} "
-              f"{C['dim']}(approval required on every command; seam layer not used){C['rst']}\n")
+    if not JSON:
+        print(f"\n{C['b']}BS2 doctor{C['rst']} — checking this environment before you run anything\n"
+              f"{C['dim']}repo: {ROOT}{C['rst']}\n")
+        if HITL:
+            print(f"{C['cyn']}mode: HITL-always{C['rst']} "
+                  f"{C['dim']}(approval required on every command; seam layer not used){C['rst']}\n")
     check_python()
     check_python_packages()
     check_core_imports()
@@ -427,6 +477,7 @@ def main():
     check_policy()
     check_broker()
     check_hitl()
+    check_scope_env()
 
     sha, when = repo_fingerprint()
     n_fail = sum(1 for s, *_ in results if s == FAIL)
@@ -439,6 +490,28 @@ def main():
         out.write_text(report + "\n")
     except Exception:
         out = None
+
+    # machine-readable output for an AI assistant driving BS2
+    if JSON:
+        obj = {
+            "tool": "bs2-doctor", "version": DOCTOR_VERSION, "repo": REPO_SLUG,
+            "commit": sha, "hitl_mode": HITL,
+            "result": "fail" if n_fail else ("warn" if n_warn else "ok"),
+            "exit_code": 2 if n_fail else (1 if n_warn else 0),
+            "counts": {"fail": n_fail, "warn": n_warn,
+                       "ok": sum(1 for s, *_ in results if s == OK)},
+            "checks": [{"status": s, "name": n, "detail": d, "fix": f}
+                       for (s, n, d, f) in results],
+            "report_text": report,
+            "report_file": str(out) if out else None,
+            "agent_action": (
+                "HARD FAILURE: do not run BS2. Show report_text to your operator and tell "
+                "them to send it to the maintainer (Ben)." if n_fail else
+                "Degraded but runnable. Surface any warn item your operator cares about."
+                if n_warn else "All clear — safe to initialize BS2."),
+        }
+        print(json.dumps(obj, indent=2))
+        return 2 if n_fail else (1 if n_warn else 0)
 
     print()
     if n_fail:
@@ -454,6 +527,9 @@ def main():
             print(f"\n{C['dim']}(also saved to {out} — you can attach that file){C['rst']}")
         print(f"\n{C['b']}Message to Ben:{C['rst']} \"Hey Ben — BS2 won't start on my box, "
               f"here's the doctor report ^\"")
+        print(f"{C['dim']}(AI assistant reading this: do not start BS2 — surface the report above "
+              f"to your operator and have them send it to the maintainer. `--json` gives you a "
+              f"machine-readable version.){C['rst']}")
         return 2
     elif n_warn:
         print(f"{C['ylw']}{C['b']}BS2 core is OK, with {n_warn} degraded item(s) above.{C['rst']}")

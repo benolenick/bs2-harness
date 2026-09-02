@@ -79,6 +79,15 @@ bash scripts/start_ariadne.sh &               # serves :8112; advisory, safe to 
 
 # 5. tell the recipe lanes which host is in scope, then run the manager
 export BS2_TARGET=198.51.100.10   # recipe-driven lanes gate on this; unset => "outside scope"
+
+# Pointing at a webapp YOU set up? The AI trooper hard-refuses loopback + LAN by default
+# (safety: it must never attack the operator's own box). Opt in for your authorized target, or
+# the recipe floor runs but every AI-improvised command is silently refused:
+#   • on 127.0.0.1 / localhost:  export GB_ALLOW_LOOPBACK=1 ; export GB_CHARTER_PORTS=8080,3000
+#   • on a LAN IP (192.168.x)  :  export GB_ALLOW_TARGET=1
+#   • on any other IP          :  nothing needed (allowed by default)
+# The destructive/GPU/VPN denies and the per-command HITL door apply regardless.
+
 python3 live/autocannon.py --target 198.51.100.10
 ```
 

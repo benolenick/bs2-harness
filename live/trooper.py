@@ -70,6 +70,15 @@ def loopback_ok():
     return os.environ.get("GB_ALLOW_LOOPBACK", "").strip() in ("1", "true", "yes")
 
 
+def allow_target_ok():
+    """Fire-time read (same discipline as loopback_ok). GB_ALLOW_TARGET=1 lets an operator
+    point BS2 at THEIR OWN authorized host (a webapp they set up on any IP — 192.168.x, a
+    container bridge, a public box) by exempting the engagement target host from the fleet-LAN
+    heuristic deny. The destructive / GPU / VPN denies STILL apply, and the door's policy scope
+    + per-command HITL remain the real gate. Default off, so fleet runs are unchanged."""
+    return os.environ.get("GB_ALLOW_TARGET", "").strip() in ("1", "true", "yes")
+
+
 def charter_ports():
     """Fire-time read, same discipline as loopback_ok: GB_CHARTER_PORTS="3006,8888".
     On a loopback engagement the charter names the DECLARED PORTS — hands honors them
@@ -105,6 +114,19 @@ def scope_ok(cmd, target):
             if bad:
                 return False, (f"out-of-charter port {bad} "
                                f"(charter: {','.join(sorted(ports))})")
+    # Operator-declared target carve-out (GB_ALLOW_TARGET): exempt the engagement target host
+    # from the fleet-LAN heuristic deny so a user can point BS2 at their own authorized webapp
+    # on any IP. Destructive/GPU/VPN patterns still bite (they don't depend on the host token).
+    if allow_target_ok() and target:
+        thost = re.sub(r"^\w+://", "", target).split("/")[0].split(":")[0]
+        if thost and thost in probe and not re.search(r"\b10\.10\.1[45]\.\d+\b", thost):
+            ports = charter_ports()
+            if ports:
+                bad = _out_of_charter_ports(cmd, ports)
+                if bad:
+                    return False, (f"out-of-charter port {bad} "
+                                   f"(charter: {','.join(sorted(ports))})")
+            probe = probe.replace(thost, "TARGET_OK")
     if SCOPE_DENY.search(probe):
         return False, "out-of-scope host / destructive / GPU / fleet-LAN"
     if REDZONE and REDZONE in cmd and not re.search(r"\b192\.168\.\d+\.\d+\b", probe):
