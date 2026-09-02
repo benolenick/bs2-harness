@@ -19,6 +19,10 @@ Parse the JSON. Then:
 
 Re-run the doctor whenever the environment changes (new key, new target, broker restarted).
 
+To set the Rules of Engagement, run `python3 scripts/bs2-roe` — a few questions (optionally after
+a gentle, read-only scan of the target) that write the governance policy and print the exact env
+exports. After a run, `python3 scripts/bs2-report` produces a clean governed write-up.
+
 ## How BS2 is meant to run (human-in-the-loop, like the MIT harness — but governed)
 
 1. The operator wants **HITL always**: every command that touches the target waits for their

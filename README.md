@@ -63,6 +63,12 @@ export TROOPER_KEY_FILE=~/.config/bs2/trooper.key     # a 0600 file holding only
 # 2. wire the governed door: a scope policy + the approval broker. WITHOUT these the
 #    door has no per-command gate. BS2_REQUIRE_HITL=1 makes it fail closed if you
 #    forget any of them — the door refuses to run rather than run ungoverned.
+#
+#    EASIEST: run the Rules-of-Engagement wizard — a few questions (optionally after a
+#    gentle, read-only scan of the target) that write the policy for you and print the
+#    exact exports, including the right scope opt-in for your target:
+python3 scripts/bs2-roe
+#    …or do it by hand:
 cp policy.example.json ~/.config/bs2/policy.json      # edit network_mode + allowed_hosts
 chmod 600 ~/.config/bs2/policy.json
 export BS2_GOVERNANCE_POLICY=~/.config/bs2/policy.json
@@ -89,6 +95,10 @@ export BS2_TARGET=198.51.100.10   # recipe-driven lanes gate on this; unset => "
 # The destructive/GPU/VPN denies and the per-command HITL door apply regardless.
 
 python3 live/autocannon.py --target 198.51.100.10
+
+# 6. after the run: a clean governed write-up (RoE in force, what ran, what was gated
+#    and why, grounded facts) — the deliverable a governed engine can produce.
+python3 scripts/bs2-report
 ```
 
 Scope lives in a policy file (see `policy.example.json`): set `network_mode` and `allowed_hosts`. Anything outside scope is denied at the door, before approval. Every box-touching command then pauses at `bs2-gate` for your `y`/`n`. With `BS2_REQUIRE_HITL=1` the door refuses to run at all unless the policy + broker + token are all set, so you can never *accidentally* run without the human gate.

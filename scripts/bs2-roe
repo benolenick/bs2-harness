@@ -5,18 +5,22 @@ Run this once at the start of an engagement:
 
     python3 scripts/bs2-roe
 
-It asks 4-5 plain questions about the pentest, then WRITES a `policy.json` the governed door
-enforces + prints the exact env exports to use. It optionally asks the trooper model to suggest
-extra guardrails from the engagement's nature — you approve each before it lands.
+It optionally does a GENTLE, READ-ONLY scan of the target (only with your yes), then asks a few
+plain questions — tailored to what it found — about what BS2 is allowed to do. Answers compile to
+a `policy.json` the governed door enforces, and it prints the exact env exports to use.
 
 Safety contract (non-negotiable):
+  * The optional scan is READ-ONLY: a light TCP service probe + one HTTP GET per web port. No
+    exploits, no brute force, no writes, polite timing. It runs only if you say yes, and it is
+    recorded to the audit trail.
   * The wizard only ever ADDS restrictions. It cannot weaken the hardcoded destructive floor
-    (rm / mkfs / dd-of-disk / fork bomb / shutdown) — that is always on, wizard or not.
+    (rm / mkfs / dd-of-disk / fork bomb / shutdown) — that is always on.
   * You review a summary and confirm before anything is written. Skip/abort => nothing changes.
   * Answers compile to a STATIC policy file; the AI is never in the runtime allow/deny path.
 """
 from __future__ import annotations
-import json, os, re, sys, urllib.request
+import json, os, re, socket, sys, time, urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 C = dict(rst="\033[0m", b="\033[1m", cyn="\033[36m", grn="\033[1;32m", ylw="\033[1;33m",
@@ -29,31 +33,102 @@ AD_DENY = [r"\bsecretsdump(\.py)?\b", r"\bdcsync\b", r"\bkerberoast\b", r"GetNPU
            r"GetUserSPNs", r"\bbloodhound\b", r"\bmimikatz\b", r"\blsadump\b",
            r"\bntlmrelayx", r"\bimpacket-", r"\b(crackmapexec|nxc|cme)\b.*\b(ldap|smb)\b"]
 PROD_DENY = [r"\bsystemctl\s+(stop|restart|disable|mask)\b", r"\bservice\s+\S+\s+(stop|restart)\b",
-             r"\b(killall|pkill)\b", r"\bkill\s+-9\b", r"\bDROP\s+(TABLE|DATABASE)\b",
-             r"\bTRUNCATE\s+TABLE\b", r"\biptables\s+-F\b", r"\buserdel\b", r"\bdeluser\b",
-             r"\bnet\s+user\s+\S+\s+/(add|del)"]
+             r"\b(killall|pkill)\b", r"\bkill\s+-9\b", r"\biptables\s+-F\b", r"\buserdel\b",
+             r"\bdeluser\b", r"\bnet\s+user\s+\S+\s+/(add|del)"]
+DBWRITE_DENY = [r"\b(DROP|TRUNCATE)\s+(TABLE|DATABASE)\b", r"\bDELETE\s+FROM\b",
+                r"\bUPDATE\s+\S+\s+SET\b", r"\bINSERT\s+INTO\b", r"\bALTER\s+TABLE\b",
+                r"\bFLUSHALL\b", r"\bFLUSHDB\b"]
+SPRAY_DENY = [r"\b(hydra|medusa|patator|ncrack)\b", r"\b(crackmapexec|nxc|cme)\b",
+              r"--password-spray", r"\bkerbrute\b"]
+
+# port -> (service, category) for the gentle scan's interpretation
+PORTS = {21: ("FTP", "ftp"), 22: ("SSH", "ssh"), 23: ("Telnet", "misc"), 25: ("SMTP", "mail"),
+         53: ("DNS", "misc"), 80: ("HTTP", "web"), 88: ("Kerberos", "ad"), 110: ("POP3", "mail"),
+         135: ("MSRPC", "ad"), 139: ("NetBIOS", "ad"), 143: ("IMAP", "mail"), 389: ("LDAP", "ad"),
+         443: ("HTTPS", "web"), 445: ("SMB", "ad"), 636: ("LDAPS", "ad"), 1433: ("MSSQL", "db"),
+         1521: ("Oracle", "db"), 3268: ("AD-GC", "ad"), 3306: ("MySQL", "db"),
+         3389: ("RDP", "remote"), 5432: ("Postgres", "db"), 5985: ("WinRM", "remote"),
+         5986: ("WinRM-S", "remote"), 6379: ("Redis", "db"), 8000: ("HTTP-alt", "web"),
+         8080: ("HTTP-alt", "web"), 8443: ("HTTPS-alt", "web"), 9200: ("Elastic", "db"),
+         27017: ("MongoDB", "db"), 3000: ("HTTP-dev", "web"), 5000: ("HTTP-dev", "web"),
+         8081: ("HTTP-alt", "web"), 9000: ("HTTP-alt", "web")}
 
 
 def ask(q, default=""):
     suffix = f" {C['dim']}[{default}]{C['rst']}" if default else ""
     try:
-        a = input(f"{C['cyn']}?{C['rst']} {C['b']}{q}{C['rst']}{suffix} ").strip()
+        return input(f"{C['cyn']}?{C['rst']} {C['b']}{q}{C['rst']}{suffix} ").strip() or default
     except EOFError:
-        a = ""
-    return a or default
+        return default
 
 
 def yes(q, default=False):
-    d = "Y/n" if default else "y/N"
-    a = ask(f"{q} ({d})").lower()
-    if not a:
-        return default
-    return a[0] == "y"
+    a = ask(f"{q} ({'Y/n' if default else 'y/N'})").lower()
+    return default if not a else a[0] == "y"
+
+
+def _http_banner(host, port):
+    scheme = "https" if port in (443, 8443, 5986) else "http"
+    try:
+        req = urllib.request.Request(f"{scheme}://{host}:{port}/", headers={"User-Agent": "bs2-roe/1"})
+        import ssl
+        ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+        with urllib.request.urlopen(req, timeout=3, context=ctx) as r:
+            body = r.read(4096).decode(errors="replace")
+            srv = r.headers.get("Server", "")
+            m = re.search(r"<title[^>]*>(.*?)</title>", body, re.I | re.S)
+            title = (m.group(1).strip()[:60] if m else "")
+            return " · ".join(x for x in (srv, title) if x)
+    except Exception:
+        return ""
+
+
+def gentle_scan(host, extra_ports=()):
+    """READ-ONLY: TCP connect on a curated port list (+ any operator-declared ports) plus one
+    HTTP GET per web port. Time-boxed. An open port that isn't in the known map but answers HTTP
+    is treated as a web service, so a webapp on any port (3000, 5000, 8109, ...) is found."""
+    targets = dict(PORTS)
+    for p in extra_ports:
+        targets.setdefault(int(p), (f"port-{p}", "unknown"))
+    open_ports = {}
+    def probe(p):
+        s = socket.socket(); s.settimeout(0.6)
+        try:
+            return p if s.connect_ex((host, p)) == 0 else None
+        except Exception:
+            return None
+        finally:
+            s.close()
+    with ThreadPoolExecutor(max_workers=24) as ex:
+        for p in ex.map(probe, list(targets)):
+            if p:
+                svc, cat = targets[p]
+                open_ports[p] = {"service": svc, "cat": cat, "banner": ""}
+    for p, info in open_ports.items():
+        if info["cat"] in ("web", "unknown"):
+            b = _http_banner(host, p)
+            if b or info["cat"] == "web":
+                info["banner"] = b
+                info["cat"] = "web"           # answered HTTP => it's a web service
+            else:
+                info["cat"] = "misc"
+    return open_ports
+
+
+def _audit_scan(host, found):
+    path = os.environ.get("GB_TARGET_AUDIT", "").strip()
+    if not path:
+        return
+    try:
+        with open(path, "a") as fh:
+            fh.write(json.dumps({"ts": int(time.time()), "mode": "roe-scan", "result": "ran",
+                                 "host": host, "read_only": True,
+                                 "ports": sorted(found)}) + "\n")
+    except Exception:
+        pass
 
 
 def ai_suggest(context):
-    """Optional: one quick trooper-model call proposing extra literal denies. Fail-open to []
-    (the deterministic policy stands without it). Never auto-applies — the caller confirms."""
     base = os.environ.get("TROOPER_BASE", "").strip()
     model = os.environ.get("TROOPER_MODEL", "").strip()
     if not base or not model or base.lower() in ("claude-cli", "claude", "sonnet"):
@@ -64,8 +139,7 @@ def ai_suggest(context):
         key = open(kf).read().strip()
     prompt = ("You are advising on the Rules of Engagement for an AUTHORIZED penetration test. "
               "Given the engagement below, propose UP TO 6 command substrings/patterns that should "
-              "be HARD-BLOCKED for safety (things that could damage the target or go out of scope). "
-              "Return ONLY a JSON array of short strings, no prose.\n\n" + context)
+              "be HARD-BLOCKED for safety. Return ONLY a JSON array of short strings.\n\n" + context)
     body = json.dumps({"model": model, "temperature": 0, "max_tokens": 300,
                        "messages": [{"role": "user", "content": prompt}]}).encode()
     hdr = {"Content-Type": "application/json"}
@@ -77,7 +151,7 @@ def ai_suggest(context):
             txt = json.load(r)["choices"][0]["message"]["content"]
         m = re.search(r"\[.*\]", txt, re.S)
         arr = json.loads(m.group(0)) if m else []
-        return [str(x).strip() for x in arr if isinstance(x, (str,)) and str(x).strip()][:6]
+        return [str(x).strip() for x in arr if str(x).strip()][:6]
     except Exception:
         return []
 
@@ -89,79 +163,107 @@ def main():
     print(f"\n{C['b']}BS2 — Rules of Engagement{C['rst']}  "
           f"{C['dim']}(a few questions; only ever ADDS restrictions){C['rst']}\n")
 
-    # 1. scope
     target = ask("Primary target host or IP (the box you're authorized to test)")
+    thost = re.sub(r"^\w+://", "", target).split("/")[0].split(":")[0] if target else ""
     ports = ask("Which port(s) are in scope? comma-separated, blank = all", "")
     extra_hosts = ask("Any other in-scope hosts/CIDRs? comma-separated, blank = none", "")
 
-    thost = re.sub(r"^\w+://", "", target).split("/")[0].split(":")[0] if target else ""
     is_loopback = bool(re.match(r"^(127\.0\.0\.1|localhost)$", thost))
     is_lan = bool(re.match(r"^192\.168\.\d+\.\d+$", thost))
 
-    # 2-3. nature of the engagement
-    prod = yes("Will this engagement touch PRODUCTION systems?", False)
-    ad = yes("Will this engagement touch Active Directory?", False)
+    # ---- optional gentle, read-only scan to tailor the questions ----
+    found = {}
+    cats = set()
+    if thost and yes(f"\nMay I run a quick {C['grn']}read-only, gentle{C['rst']} scan of "
+                     f"{C['b']}{thost}{C['rst']} to tailor these questions?\n"
+                     f"  {C['dim']}(a light TCP service probe + one HTTP GET per web port — no "
+                     f"exploits, no brute force, no writes){C['rst']}", True):
+        print(f"  {C['dim']}scanning {thost} …{C['rst']}", flush=True)
+        declared = [int(x) for x in re.findall(r"\d{1,5}", ports)]
+        found = gentle_scan(thost, declared)
+        _audit_scan(thost, found)
+        cats = {i["cat"] for i in found.values()}
+        if found:
+            print(f"  {C['grn']}found:{C['rst']}")
+            for p in sorted(found):
+                info = found[p]
+                extra = f"  {C['dim']}{info['banner']}{C['rst']}" if info["banner"] else ""
+                print(f"    :{p:<5} {info['service']}{extra}")
+        else:
+            print(f"  {C['dim']}(no common ports open, or host unreachable — using generic questions){C['rst']}")
 
-    # 4. free-text hard blocks (the star: add-only)
-    raw = ask("Anything you want HARD-BLOCKED no matter what? "
-              "(comma-separated, e.g. 'shutdown, DROP TABLE, userdel')", "")
-    manual = [p.strip() for p in raw.split(",") if p.strip()]
+    # ---- targeted questions, driven by what the scan saw ----
+    denylist = []
 
-    # 5. autonomy
-    print(f"\n  {C['b']}Approval mode:{C['rst']} [1] approve EVERY command (max control)   "
+    # production is always worth asking
+    prod = yes("\nWill this engagement touch PRODUCTION systems?", False)
+    if not prod:
+        denylist += PROD_DENY
+
+    # AD: ask sharply if the scan smells like a DC
+    if "ad" in cats:
+        ad = yes(f"I see {C['ylw']}AD/directory services{C['rst']} (LDAP/Kerberos/SMB) — this "
+                 f"looks like a domain controller. Are we authorized to touch Active Directory?", False)
+    else:
+        ad = yes("Will this engagement touch Active Directory?", False)
+    if not ad:
+        denylist += AD_DENY
+
+    # databases: only if seen
+    if "db" in cats:
+        dbs = ", ".join(sorted({found[p]["service"] for p in found if found[p]["cat"] == "db"}))
+        if not yes(f"I see a database ({C['ylw']}{dbs}{C['rst']}). Are DESTRUCTIVE writes "
+                   f"(DROP/DELETE/UPDATE/TRUNCATE) allowed against it?", False):
+            denylist += DBWRITE_DENY
+
+    # credential spraying: if SSH / RDP / WinRM / web-auth surface exists
+    if cats & {"ssh", "remote", "web", "ad"}:
+        if not yes("Is credential brute-forcing / password spraying allowed?", False):
+            denylist += SPRAY_DENY
+
+    # free-text hard blocks (the star: add-only)
+    raw = ask("\nAnything else you want HARD-BLOCKED no matter what? "
+              "(comma-separated, e.g. 'shutdown, wp-config')", "")
+    denylist += [p.strip() for p in raw.split(",") if p.strip()]
+
+    # autonomy
+    print(f"\n  {C['b']}Approval mode:{C['rst']} [1] approve EVERY command   "
           f"[2] auto-approve recon, approve exploits")
     mode = ask("Choose 1 or 2", "1")
 
-    denylist = list(manual)
-    if not prod:
-        denylist += PROD_DENY          # not touching prod => forbid destructive-on-prod verbs
-    if not ad:
-        denylist += AD_DENY            # not touching AD => forbid AD tooling
     denylist = sorted(set(denylist))
 
-    # optional AI suggestions
     if yes("\nAsk the AI to suggest extra guardrails from this engagement?", False):
-        ctx = (f"target={thost or 'n/a'} ports={ports or 'all'} prod={prod} ad={ad} "
+        ctx = (f"target={thost} open_ports={sorted(found)} prod={prod} ad={ad} "
                f"already_blocked={denylist[:8]}")
-        sugg = ai_suggest(ctx)
-        if not sugg:
-            print(f"  {C['dim']}(no suggestions / no model configured){C['rst']}")
-        for s in sugg:
+        for s in ai_suggest(ctx):
             if s not in denylist and yes(f"  add hard-block {C['ylw']}{s!r}{C['rst']}?", True):
                 denylist.append(s)
         denylist = sorted(set(denylist))
 
-    # ---- compile the policy (add-only; strict defaults) ----
-    hosts = []
-    if thost:
-        hosts.append(thost if (is_loopback or "/" in thost) else thost)
-    hosts += [h.strip() for h in extra_hosts.split(",") if h.strip()]
+    # ---- compile policy (add-only; strict defaults) ----
+    hosts = ([thost] if thost else []) + [h.strip() for h in extra_hosts.split(",") if h.strip()]
     net = "loopback_only" if is_loopback else ("scope_only" if hosts else "deny")
     policy = {
-        "network_mode": net,
-        "allowed_hosts": hosts,
-        "max_actions_per_host": 500,
-        "budget_window_seconds": 3600,
-        "command_approval_timeout_seconds": 300,
-        "denylist_extra": denylist,
+        "network_mode": net, "allowed_hosts": hosts,
+        "max_actions_per_host": 500, "budget_window_seconds": 3600,
+        "command_approval_timeout_seconds": 300, "denylist_extra": denylist,
         "_roe": {"target": thost, "ports": ports, "touches_prod": prod, "touches_ad": ad,
-                 "approval_mode": "every" if mode.strip() == "1" else "recon-auto"},
+                 "approval_mode": "every" if mode.strip() == "1" else "recon-auto",
+                 "scan_ports_seen": sorted(found)},
     }
 
-    # ---- summary + confirm ----
     print(f"\n{C['b']}This will write a policy that:{C['rst']}")
     print(f"  • scopes to: {', '.join(hosts) or '(none — deny)'}   mode={net}")
-    print(f"  • hard-blocks {len(denylist)} extra pattern(s)"
-          f"{' incl. AD tooling' if not ad else ''}{' incl. prod-destructive verbs' if not prod else ''}")
-    if denylist:
-        for d in denylist[:12]:
-            print(f"      {C['red']}✗{C['rst']} {d}")
-        if len(denylist) > 12:
-            print(f"      {C['dim']}… +{len(denylist)-12} more{C['rst']}")
+    print(f"  • hard-blocks {len(denylist)} extra pattern(s)")
+    for d in denylist[:12]:
+        print(f"      {C['red']}✗{C['rst']} {d}")
+    if len(denylist) > 12:
+        print(f"      {C['dim']}… +{len(denylist)-12} more{C['rst']}")
     print(f"  • the hardcoded destructive floor (rm/mkfs/dd/shutdown/fork-bomb) stays on regardless")
 
-    dest = ask("\nWrite to which policy file?", os.path.expanduser("~/.config/bs2/policy.json"))
-    dest = Path(os.path.expanduser(dest))
+    dest = Path(os.path.expanduser(ask("\nWrite to which policy file?",
+                                        os.path.expanduser("~/.config/bs2/policy.json"))))
     if not yes(f"Write {dest} now?", True):
         print("aborted — nothing written.")
         return 1
@@ -170,8 +272,7 @@ def main():
     os.chmod(dest, 0o600)
     print(f"\n{C['grn']}✔ wrote {dest} (0600){C['rst']}")
 
-    # env the operator now exports (incl. the scope opt-in for loopback/LAN targets)
-    print(f"\n{C['b']}Now export these (add to your shell/profile):{C['rst']}")
+    print(f"\n{C['b']}Now export these:{C['rst']}")
     print(f"  export BS2_GOVERNANCE_POLICY={dest}")
     print(f"  export BS2_REQUIRE_HITL=1")
     print(f"  export BS2_TARGET={thost or '<target>'}")
@@ -179,9 +280,8 @@ def main():
         print(f"  export GB_ALLOW_LOOPBACK=1" + (f" ; export GB_CHARTER_PORTS={ports}" if ports else ""))
     elif is_lan:
         print(f"  export GB_ALLOW_TARGET=1")
-    print(f"\n{C['dim']}Then start the broker + gate and run the doctor:"
-          f"\n  python3 live/broker/bs2_cli_broker.py &  ; python3 live/broker/bs2_gate.py"
-          f"\n  python3 scripts/bs2-doctor --require-hitl{C['rst']}")
+    print(f"\n{C['dim']}Then: start the broker + gate, run scripts/bs2-doctor --require-hitl, "
+          f"and after the run, scripts/bs2-report for a clean write-up.{C['rst']}")
     return 0
 
 

@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""bs2-report — a clean after-action write-up from a BS2 engagement.
+
+    python3 scripts/bs2-report [--audit FILE] [--policy FILE] [--raw FILE] [--facts FILE] [--out FILE]
+
+Reads the governed door's audit trail (every command that touched the target, with its verdict)
+and the Rules of Engagement that were in force, and produces a professional Markdown report:
+the RoE, a governance tally (what ran, what was gated and why), a command timeline, and any
+grounded facts. This is the deliverable a governed engine can produce that a seeded score cannot.
+
+Defaults read env: --audit=$GB_TARGET_AUDIT, --policy=$BS2_GOVERNANCE_POLICY, --raw=$GB_RAW_LOG.
+The audit is content-blind (command hashes only); pass --raw (the operator-authorized full-command
+log) to include command text.
+"""
+from __future__ import annotations
+import argparse, json, os, time
+from collections import Counter
+
+
+def _load_jsonl(path):
+    rows = []
+    if path and os.path.exists(path):
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    try:
+                        rows.append(json.loads(line))
+                    except Exception:
+                        pass
+    return rows
+
+
+def _classify(rec):
+    """Map an audit record to (bucket, human reason)."""
+    mode = rec.get("mode", "")
+    res = rec.get("result", "")
+    detail = (rec.get("detail") or "")
+    if mode == "roe-scan":
+        return "recon", "read-only RoE scan"
+    if res in ("ran", "allowed"):
+        return "executed", "approved & executed"
+    if mode == "guard":
+        return "blocked", "destructive floor"
+    if mode == "roe-denylist":
+        # target_exec already labels detail as "RoE denylist (<pat>)" — don't double-wrap.
+        return "blocked", detail if detail.startswith("RoE denylist") else f"RoE denylist ({detail})"
+    if mode == "runtime-guard":
+        return "blocked", f"scope/budget ({detail})"
+    if mode == "require-hitl":
+        return "blocked", "HITL not wired (fail-closed)"
+    if mode == "command-approval":
+        if "denied" in detail:
+            return "denied", "operator denied"
+        return "blocked", f"approval unavailable ({detail})"
+    if res == "denied":
+        return "denied", detail or "denied"
+    return "blocked", detail or mode or "blocked"
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--audit", default=os.environ.get("GB_TARGET_AUDIT", ""))
+    ap.add_argument("--policy", default=os.environ.get("BS2_GOVERNANCE_POLICY", ""))
+    ap.add_argument("--raw", default=os.environ.get("GB_RAW_LOG", ""))
+    ap.add_argument("--facts", default="")
+    ap.add_argument("--out", default="bs2-report.md")
+    a = ap.parse_args()
+
+    audit = _load_jsonl(a.audit)
+    raw = {r.get("cmd"): r for r in _load_jsonl(a.raw)} if a.raw else {}
+    raw_list = _load_jsonl(a.raw) if a.raw else []
+    policy = {}
+    if a.policy and os.path.exists(a.policy):
+        try:
+            policy = json.load(open(a.policy))
+        except Exception:
+            policy = {}
+    roe = policy.get("_roe", {})
+
+    ts = [r.get("ts") for r in audit if r.get("ts")]
+    span = ""
+    if ts:
+        span = f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(min(ts)))} – " \
+               f"{time.strftime('%H:%M', time.localtime(max(ts)))}"
+
+    buckets = Counter()
+    reasons = Counter()
+    for r in audit:
+        b, why = _classify(r)
+        buckets[b] += 1
+        if b in ("blocked", "denied"):
+            reasons[why] += 1
+
+    L = []
+    L.append("# BS2 engagement report\n")
+    L.append(f"- **Target:** {roe.get('target') or policy.get('allowed_hosts') or 'n/a'}")
+    if span:
+        L.append(f"- **When:** {span}")
+    L.append(f"- **Scope mode:** {policy.get('network_mode','n/a')}  ·  "
+             f"**hosts:** {', '.join(policy.get('allowed_hosts', [])) or 'n/a'}")
+    L.append(f"- **Approval:** {roe.get('approval_mode','per-command HITL')}")
+    L.append("")
+
+    L.append("## Rules of engagement in force\n")
+    L.append(f"- Touches production: **{roe.get('touches_prod', 'n/a')}**")
+    L.append(f"- Touches Active Directory: **{roe.get('touches_ad', 'n/a')}**")
+    dl = policy.get("denylist_extra", [])
+    L.append(f"- Operator hard-blocks: **{len(dl)}** pattern(s)")
+    for d in dl[:20]:
+        L.append(f"  - `{d}`")
+    L.append("- Hardcoded destructive floor (rm/mkfs/dd/shutdown/fork-bomb): **always on**")
+    L.append("")
+
+    total = sum(buckets.values())
+    L.append("## Governance tally\n")
+    L.append(f"- Commands seen at the door: **{total}**")
+    L.append(f"- Executed (approved): **{buckets.get('executed',0)}**")
+    L.append(f"- Denied by operator: **{buckets.get('denied',0)}**")
+    L.append(f"- Blocked by a guardrail: **{buckets.get('blocked',0)}**")
+    if roe.get("scan_ports_seen"):
+        L.append(f"- Read-only RoE scan saw ports: {', '.join(map(str, roe['scan_ports_seen']))}")
+    if reasons:
+        L.append("\n**Why commands were stopped:**")
+        for why, n in reasons.most_common():
+            L.append(f"- {why}: {n}")
+    L.append("")
+
+    L.append("## Command timeline\n")
+    if not audit:
+        L.append("_No audit records found. Set `GB_TARGET_AUDIT` during the run to capture the trail._")
+    else:
+        show_cmd = bool(raw_list)
+        L.append("| # | time | class | verdict | " + ("command" if show_cmd else "cmd hash") + " |")
+        L.append("|---|------|-------|---------|" + ("---------" if show_cmd else "----------") + "|")
+        raw_iter = iter(raw_list)
+        for i, r in enumerate(audit, 1):
+            b, why = _classify(r)
+            t = time.strftime("%H:%M:%S", time.localtime(r.get("ts", 0))) if r.get("ts") else ""
+            verdict = {"executed": "✅ ran", "denied": "🚫 denied",
+                       "blocked": "⛔ blocked", "recon": "🔍 recon"}.get(b, b)
+            if show_cmd:
+                nxt = next(raw_iter, {})
+                cell = (nxt.get("cmd") or r.get("host") or r.get("cmd_sha", ""))[:80]
+            else:
+                cell = r.get("cmd_sha", "") or r.get("host", "")
+            L.append(f"| {i} | {t} | {r.get('class','')} | {verdict} | `{cell}` |")
+    L.append("")
+
+    facts = _load_jsonl(a.facts) if a.facts else []
+    if facts:
+        L.append("## Grounded facts\n")
+        for f in facts:
+            L.append(f"- {json.dumps(f) if isinstance(f, dict) else f}")
+        L.append("")
+
+    L.append(f"\n_Generated by bs2-report at {time.strftime('%Y-%m-%d %H:%M:%S')}._")
+    md = "\n".join(L)
+    with open(a.out, "w") as fh:
+        fh.write(md + "\n")
+    print(md)
+    print(f"\n\033[2m(written to {a.out})\033[0m", file=__import__("sys").stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

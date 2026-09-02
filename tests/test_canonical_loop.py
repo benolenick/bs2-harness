@@ -37,7 +37,8 @@ def test_charter_default_loads_and_binds():
 def test_charter_gates_wrong_target():
     c, _ = charter.load()
     charter.bind_target(c, "198.51.100.10")
-    ok, why = charter.validate_target(c, "198.51.100.10")
+    # validate a DIFFERENT host than the one bound — that is the out-of-scope case this gates
+    ok, why = charter.validate_target(c, "203.0.113.99")
     assert not ok and "not in charter scope" in why
 
 

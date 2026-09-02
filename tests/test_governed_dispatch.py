@@ -122,7 +122,9 @@ def test_remote_deny_marker(monkeypatch):
     monkeypatch.setattr(TEXEC.subprocess, "run", lambda argv, **kw:
                         SimpleNamespace(returncode=1, stdout="",
                                         stderr="impact critical: denied"))
-    out = TEXEC.run("rm -rf /tmp/x")
+    # use a NON-destructive command: the destructive-command guard runs before the governed
+    # dispatch, so `rm` would be blocked by that guard first and never reach the deny marker.
+    out = TEXEC.run("id")
     assert out.startswith("[GOVERNED DENY: impact critical: denied")
 
 

@@ -93,6 +93,14 @@ def test_safe_stream_rejects_text_and_bad_shapes(tmp_path, event, fields):
 
 
 def test_publish_is_atomic_and_pointer_contains_name_only(tmp_path):
+    # publish_active_run wires a root-owned production projector: it needs the 'lenz'
+    # system account + setfacl. A fresh clone (the friend's box) has neither, so skip
+    # rather than emit a red — the SafeLenzStream tests above cover the portable logic.
+    import pwd
+    try:
+        pwd.getpwnam("lenz")
+    except KeyError:
+        pytest.skip("requires the 'lenz' system account (production projector wiring)")
     raw = tmp_path / "raw"
     run = raw / "htb-synthetic"
     run.mkdir(parents=True)
