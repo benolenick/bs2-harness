@@ -461,7 +461,74 @@ def emit_report(sha, when):
     return "\n".join(lines)
 
 
+# =========================================================================================
+# IN-FLIGHT REPAIR — map a failure marker BS2 emitted to a diagnosis + fix, so an AI driving
+# BS2 can self-repair mid-run: `bs2-doctor --explain "<marker text>"` (add --json for a machine
+# object). Keyed to the stable markers the door and trooper emit.
+# =========================================================================================
+REPAIR = [
+    (r"BS2_REQUIRE_HITL is set but per-command approval is not wired",
+     "HITL is required but the approval path isn't fully wired.",
+     "Set BS2_GOVERNANCE_POLICY + BS2_GOVERNANCE_BROKER_URL + BS2_GOVERNANCE_BROKER_TOKEN, start "
+     "the broker, and re-run. This is operator setup — surface it, don't work around it."),
+    (r"RoE denylist",
+     "The operator forbade this exact command in the Rules of Engagement.",
+     "Do NOT retry or rephrase to evade it. Pick a different approach, or ask the operator to "
+     "amend the RoE (re-run scripts/bs2-roe)."),
+    (r"destructive pattern",
+     "The hardcoded destructive floor blocked this (rm/mkfs/dd-of-disk/shutdown/fork-bomb).",
+     "This can never be bypassed. Achieve the goal a non-destructive way."),
+    (r"outside the configured scope|runtime target is outside",
+     "The target is not in the policy's allowed_hosts (scope guard).",
+     "Confirm BS2_TARGET is the authorized host and it's in policy allowed_hosts. If correct, the "
+     "operator must add it — do not widen scope yourself."),
+    (r"trooper scope-guard BLOCKED",
+     "The trooper's safety guard refused the target host (loopback/LAN denied by default).",
+     "If the target is 127.0.0.1/localhost: set GB_ALLOW_LOOPBACK=1 + GB_CHARTER_PORTS=<ports>. "
+     "If it's a 192.168.x LAN IP: set GB_ALLOW_TARGET=1. Then re-run. Surface to the operator."),
+    (r"out-of-charter port",
+     "The command touched a port outside the declared charter ports.",
+     "Restrict to GB_CHARTER_PORTS, or have the operator add the port to the charter."),
+    (r"approval broker is unavailable|approval denied \(.*unavailable",
+     "The approval broker isn't reachable (or token missing).",
+     "Start it: python3 live/broker/bs2_cli_broker.py ; ensure BS2_GOVERNANCE_BROKER_TOKEN is set."),
+    (r"approval_timeout",
+     "A command waited for approval and nobody answered.",
+     "An approver must be running: python3 live/broker/bs2_gate.py (human) or the servicer."),
+    (r"per-command approval denied",
+     "The operator explicitly denied this command.",
+     "Respect it — move on to another approach; do not resubmit the same command."),
+    (r"runtime policy permissions are unsafe",
+     "The policy file or its directory is group/world accessible; the door fail-closes.",
+     "chmod 600 the policy file and chmod 700 its directory, then re-run."),
+    (r"GOVERNED (DENY|ERROR)",
+     "You're routing through the capability seam, which needs a package not bundled here.",
+     "For HITL-always operation, unset BS2_SEAM_RUN / GB_GOVERNED_HOST and use the broker path."),
+]
+
+
+def explain(marker):
+    import re as _re
+    hits = [(d, f) for (pat, d, f) in REPAIR if _re.search(pat, marker or "", _re.I)]
+    obj = {"marker": marker, "matched": bool(hits),
+           "diagnosis": hits[0][0] if hits else "Unrecognized marker.",
+           "fix": hits[0][1] if hits else
+                  "Run `python3 scripts/bs2-doctor --require-hitl --json` for a full health check "
+                  "and surface anything failing to the operator."}
+    if JSON:
+        print(json.dumps(obj, indent=2))
+    else:
+        print(f"\n{C['b']}marker:{C['rst']} {marker}")
+        print(f"{C['ylw']}diagnosis:{C['rst']} {obj['diagnosis']}")
+        print(f"{C['grn']}fix:{C['rst']} {obj['fix']}\n")
+    return 0 if hits else 3
+
+
 def main():
+    if "--explain" in sys.argv:
+        i = sys.argv.index("--explain")
+        marker = " ".join(a for a in sys.argv[i + 1:] if a != "--json")
+        return explain(marker)
     if not JSON:
         print(f"\n{C['b']}BS2 doctor{C['rst']} — checking this environment before you run anything\n"
               f"{C['dim']}repo: {ROOT}{C['rst']}\n")

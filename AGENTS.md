@@ -40,3 +40,26 @@ Re-run the doctor whenever the environment changes (new key, new target, broker 
 
 Never point BS2 at a host the operator is not authorized to test. The doctor and the door enforce
 scope, but you are the first line.
+
+## Self-repair in flight
+
+BS2 tells you why it stopped. Whenever a command comes back with a marker like
+`[target-exec BLOCKED: ...]`, `[trooper scope-guard BLOCKED: ...]`, or `[GOVERNED DENY: ...]`,
+DON'T guess and DON'T retry the same thing — look it up:
+
+```bash
+python3 scripts/bs2-doctor --explain "<paste the exact marker text>" --json
+```
+
+You get `{diagnosis, fix}`. Then:
+
+- **Setup/config fix you can safely make** (an unset scope flag, an unstarted broker, unsafe
+  policy perms) — apply it, then re-run the doctor (`--require-hitl --json`) to confirm, and
+  continue.
+- **An operator decision** (`RoE denylist`, `per-command approval denied`, `outside scope`,
+  `destructive pattern`) — respect it. Do not rephrase to evade a block. Pick another approach,
+  or surface it to the operator to amend the RoE (`scripts/bs2-roe`).
+
+Re-run `bs2-doctor --require-hitl --json` any time the environment changes or things start
+failing for no clear reason. The health check + `--explain` are your repair loop: the fix rides
+in the error, so read it, resolve it, keep moving — but never weaken a guardrail to get unstuck.

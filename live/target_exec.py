@@ -432,6 +432,33 @@ def _require_hitl_gate():
     return None
 
 
+def _denylist_extra_block(cmd):
+    """Add-only operator denylist from the governance policy's `denylist_extra` — the Rules-of-
+    Engagement wizard (scripts/bs2-roe) writes these ("things that must be impossible this
+    engagement"). This ONLY extends the hardcoded destructive floor, never shrinks it. A pattern
+    that is not valid regex is matched literally, so a plain string the operator typed always
+    blocks. Unreadable/absent policy => no extra denials here (the runtime guard fail-closes
+    on an unreadable policy separately)."""
+    path = os.environ.get("BS2_GOVERNANCE_POLICY", "").strip()
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            patterns = json.load(fh).get("denylist_extra", []) or []
+    except Exception:
+        return None
+    for pat in patterns:
+        if not isinstance(pat, str) or not pat.strip():
+            continue
+        try:
+            hit = re.search(pat, cmd or "", re.I)
+        except re.error:
+            hit = pat.lower() in (cmd or "").lower()
+        if hit:
+            return f"RoE denylist ({pat[:60]})"
+    return None
+
+
 def run(cmd, target=None, *, action_class="web.exploit", timeout=None, ssh_host=None,
         estimated_cost_minor=None, currency="USD", run_id=None, assessment_id=None):
     """THE single target-contact primitive. Returns combined stdout+stderr (str).
@@ -448,6 +475,11 @@ def run(cmd, target=None, *, action_class="web.exploit", timeout=None, ssh_host=
         _audit({"mode": "require-hitl", "cmd_sha": _sha(cmd), "result": "blocked",
                 "detail": hitl_bad})
         return f"[target-exec BLOCKED: {hitl_bad}]"
+    roe_bad = _denylist_extra_block(cmd)
+    if roe_bad:
+        _audit({"mode": "roe-denylist", "cmd_sha": _sha(cmd), "result": "blocked",
+                "detail": roe_bad})
+        return f"[target-exec BLOCKED: {roe_bad}]"
     bad = _blocked(cmd)
     if bad:
         _audit({"mode": "guard", "cmd_sha": _sha(cmd), "result": "blocked", "detail": bad})
