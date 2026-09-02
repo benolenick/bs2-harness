@@ -50,24 +50,41 @@ and the governed door decides whether the trigger fires.
 ## Quickstart
 
 ```bash
+# 0. health-check this environment FIRST — it squawks loud on anything wrong and
+#    prints a report to send to the maintainer. Add --require-hitl to demand the
+#    human-in-the-loop path be fully wired (recommended).
+python3 scripts/bs2-doctor --require-hitl
+
 # 1. point the trooper at a model (any OpenAI-compatible endpoint)
 export TROOPER_BASE=https://api.your-provider.com/v1
 export TROOPER_MODEL=your-model
-export TROOPER_KEY_FILE=~/.config/bs2/trooper.key
+export TROOPER_KEY_FILE=~/.config/bs2/trooper.key     # a 0600 file holding only the key
 
-# 2. start the operator approval gate in a terminal (interactive HITL)
-python3 live/broker/bs2_cli_broker.py &     # the broker
-python3 live/broker/bs2_gate.py             # the TTY approver — y/n on every command
+# 2. wire the governed door: a scope policy + the approval broker. WITHOUT these the
+#    door has no per-command gate. BS2_REQUIRE_HITL=1 makes it fail closed if you
+#    forget any of them — the door refuses to run rather than run ungoverned.
+cp policy.example.json ~/.config/bs2/policy.json      # edit network_mode + allowed_hosts
+chmod 600 ~/.config/bs2/policy.json
+export BS2_GOVERNANCE_POLICY=~/.config/bs2/policy.json
+export BS2_GOVERNANCE_BROKER_URL=http://127.0.0.1:8129
+export BS2_GOVERNANCE_BROKER_TOKEN=$(python3 -c 'import secrets;print(secrets.token_hex(32))')
+export BS2_REQUIRE_HITL=1
 
-# 3. (optional) start the Ariadne attack-path planner for path ranking
-bash scripts/start_ariadne.sh &             # serves :8112; advisory, safe to omit
+# 3. start the operator approval gate in a terminal (interactive HITL)
+BS2_BROKER_PORT=8129 python3 live/broker/bs2_cli_broker.py &   # the broker (:8129)
+python3 live/broker/bs2_gate.py               # the TTY approver — y/n on every command
 
-# 4. tell the recipe lanes which host is in scope, then run the manager
+# 4. (optional) start the Ariadne attack-path planner for path ranking
+bash scripts/start_ariadne.sh &               # serves :8112; advisory, safe to omit
+
+# 5. tell the recipe lanes which host is in scope, then run the manager
 export BS2_TARGET=198.51.100.10   # recipe-driven lanes gate on this; unset => "outside scope"
 python3 live/autocannon.py --target 198.51.100.10
 ```
 
-Scope lives in a policy file (see `policy.example.json`): set `network_mode` and `allowed_hosts`. Anything outside scope is denied at the door, before approval.
+Scope lives in a policy file (see `policy.example.json`): set `network_mode` and `allowed_hosts`. Anything outside scope is denied at the door, before approval. Every box-touching command then pauses at `bs2-gate` for your `y`/`n`. With `BS2_REQUIRE_HITL=1` the door refuses to run at all unless the policy + broker + token are all set, so you can never *accidentally* run without the human gate.
+
+> **Note on the capability seam.** BS2 also has an optional deeper layer (`BS2_SEAM_RUN` / `GB_GOVERNED_HOST` — capability TTL, risk ceilings, hash-chained audit) that depends on a separate governance engine package not bundled here. HITL approval above does **not** need it. Leave those variables unset for HITL-always operation; `tests/test_e2e_contract.py` and `tests/test_governed_dispatch.py` exercise that seam and are expected to skip/fail without the package.
 
 ## Authorized use only
 

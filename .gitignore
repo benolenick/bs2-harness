@@ -14,3 +14,4 @@ runs/
 *.sqlite3-*
 *.raw
 *.log
+bs2-doctor-report.txt

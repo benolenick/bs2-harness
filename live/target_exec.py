@@ -412,16 +412,42 @@ def classify_action(cmd):
     return "web.exploit"
 
 
+_HITL_ENV = ("BS2_GOVERNANCE_POLICY", "BS2_GOVERNANCE_BROKER_URL", "BS2_GOVERNANCE_BROKER_TOKEN")
+
+
+def _require_hitl_gate():
+    """When BS2_REQUIRE_HITL is truthy, turn 'HITL is configured' into 'HITL cannot be
+    skipped': refuse to run unless the FULL per-command approval path is wired — a
+    governance policy AND a broker URL AND a broker token. Without this, forgetting to
+    set the policy makes `_command_approval` return None (no gate) and the witnessed
+    fallback runs UNGOVERNED. This gate fails closed for operators who want HITL always.
+    """
+    val = os.environ.get("BS2_REQUIRE_HITL", "").strip().lower()
+    if val in ("", "0", "false", "no", "off"):
+        return None
+    missing = [name for name in _HITL_ENV if not os.environ.get(name, "").strip()]
+    if missing:
+        return ("BS2_REQUIRE_HITL is set but per-command approval is not wired "
+                f"(missing: {', '.join(missing)}) — refusing to run ungoverned")
+    return None
+
+
 def run(cmd, target=None, *, action_class="web.exploit", timeout=None, ssh_host=None,
         estimated_cost_minor=None, currency="USD", run_id=None, assessment_id=None):
     """THE single target-contact primitive. Returns combined stdout+stderr (str).
 
+    - If BS2_REQUIRE_HITL is set, refuses unless per-command approval is fully wired.
     - Applies the destructive-command guard.
     - If a governed seam is open (BS2_SEAM_RUN), routes through the governed door (fail-closed).
     - Otherwise runs the witnessed fallback: local, or a short-lived ssh to ssh_host
       (defaults to TROOPER_EXEC_SSH), with the command appended to the audit trail.
     """
     timeout = CMD_TIMEOUT if timeout is None else timeout
+    hitl_bad = _require_hitl_gate()
+    if hitl_bad:
+        _audit({"mode": "require-hitl", "cmd_sha": _sha(cmd), "result": "blocked",
+                "detail": hitl_bad})
+        return f"[target-exec BLOCKED: {hitl_bad}]"
     bad = _blocked(cmd)
     if bad:
         _audit({"mode": "guard", "cmd_sha": _sha(cmd), "result": "blocked", "detail": bad})

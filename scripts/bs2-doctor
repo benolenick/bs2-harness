@@ -1,0 +1,472 @@
+#!/usr/bin/env python3
+"""bs2-doctor — BS2 initialization health check.
+
+Run this FIRST, before anything else, in the environment where you will run BS2:
+
+    python3 scripts/bs2-doctor
+
+It probes everything BS2 needs to initialize and, if anything is wrong, prints a
+LOUD banner and a ready-to-send report block. Copy that block and message it to
+Ben — it says exactly what failed on your box, with the repo version, your OS,
+and the precise error, so he can fix it without a back-and-forth.
+
+Design rules:
+  * Stdlib only. The doctor MUST run even when nothing else is installed.
+  * Every check is tiered: OK (green), WARN (degraded — BS2 still runs, reduced),
+    FAIL (hard — core BS2 will not initialize).
+  * Exit code: 0 = all OK, 1 = warnings only, 2 = at least one hard failure.
+  * Never touches a target, never needs network unless you point it at a broker.
+"""
+from __future__ import annotations
+import importlib.util
+import json
+import os
+import platform
+import re
+import shutil
+import socket
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+DOCTOR_VERSION = "1"
+REPO_SLUG = "benolenick/bs2-harness"
+
+# ---- locate the repo from this file (scripts/bs2-doctor -> repo root) ---------------------
+HERE = Path(__file__).resolve()
+ROOT = HERE.parent.parent
+# the repo imports its modules with these dirs on sys.path (mirrors how the code + tests run)
+for _p in ("live", "manager", "catalog", "ariadne", "scorer", os.path.join("live", "broker")):
+    sys.path.insert(0, str(ROOT / _p))
+sys.path.insert(0, str(ROOT))
+
+C = dict(rst="\033[0m", b="\033[1m", red="\033[1;31m", grn="\033[1;32m",
+         ylw="\033[1;33m", dim="\033[2m", cyn="\033[36m")
+if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
+    C = {k: "" for k in C}
+
+# HITL-always mode: the operator wants human approval on EVERY command. Turned on by
+# `--require-hitl` or BS2_REQUIRE_HITL truthy. In this mode an unwired approval path is a
+# HARD failure (not a warning), and the governed-seam package being absent is informational.
+HITL = ("--require-hitl" in sys.argv or "--hitl" in sys.argv
+        or os.environ.get("BS2_REQUIRE_HITL", "").strip().lower() in ("1", "true", "yes", "on"))
+
+OK, WARN, FAIL = "OK", "WARN", "FAIL"
+_MARK = {OK: f"{C['grn']}✔ OK  {C['rst']}", WARN: f"{C['ylw']}▲ WARN{C['rst']}",
+         FAIL: f"{C['red']}✖ FAIL{C['rst']}"}
+
+results = []  # list of (status, name, detail, fix)
+
+
+def check(status, name, detail="", fix=""):
+    results.append((status, name, detail, fix))
+    line = f"  {_MARK[status]}  {C['b']}{name}{C['rst']}"
+    if detail:
+        line += f"  {C['dim']}— {detail}{C['rst']}"
+    print(line)
+    if status != OK and fix:
+        print(f"          {C['cyn']}fix:{C['rst']} {fix}")
+
+
+def _has_module(mod):
+    try:
+        return importlib.util.find_spec(mod) is not None
+    except Exception:
+        return False
+
+
+# ---- repo fingerprint (goes in the report so Ben knows the exact version) -----------------
+def repo_fingerprint():
+    sha, when = "unknown", "unknown"
+    try:
+        r = subprocess.run(["git", "-C", str(ROOT), "log", "-1", "--format=%h|%ci"],
+                           capture_output=True, text=True, timeout=8)
+        if r.returncode == 0 and "|" in r.stdout:
+            sha, when = r.stdout.strip().split("|", 1)
+    except Exception:
+        pass
+    return sha, when
+
+
+# =========================================================================================
+# CHECKS
+# =========================================================================================
+def check_python():
+    v = sys.version_info
+    ver = f"{v.major}.{v.minor}.{v.micro}"
+    if (v.major, v.minor) >= (3, 10):
+        check(OK, "python", f"{ver} ({platform.python_implementation()})")
+    else:
+        check(FAIL, "python", f"{ver} — BS2 needs 3.10+",
+              "install Python 3.10 or newer and re-run with it")
+
+
+def check_python_packages():
+    # (import-name, tier, why)
+    hard = [("cryptography", "Lenz terminal-projection signing (ed25519)"),
+            ("yaml", "the Ariadne planner loads its operator corpus from YAML (pyyaml)")]
+    soft = [("requests", "playwright ecosystem / misc probes"),
+            ("playwright", "browser adapters (registry probes, browser lanes)"),
+            ("flask", "the LFI specialist lane's local test server"),
+            ("passlib", "hash-cracking lanes (phpass etc.)")]
+    for mod, why in hard:
+        if _has_module(mod):
+            check(OK, f"pkg:{mod}", why)
+        else:
+            pip = "pyyaml" if mod == "yaml" else mod
+            check(FAIL, f"pkg:{mod}", f"missing — {why}", f"pip install {pip}")
+    missing_soft = [m for m, _ in soft if not _has_module(m)]
+    if not missing_soft:
+        check(OK, "pkg:optional", "requests, playwright, flask, passlib all present")
+    else:
+        check(WARN, "pkg:optional", "missing: " + ", ".join(missing_soft) +
+              " — those lanes degrade/skip; core loop still runs",
+              "pip install " + " ".join(missing_soft) +
+              "  (playwright also needs: playwright install chromium)")
+
+
+def check_core_imports():
+    """The modules that must import for BS2 to initialize AT ALL."""
+    core = ["target_exec", "impact", "charter", "trooper", "hands",
+            "bs2_cli_broker", "bs2_gate", "bs2_approve", "run_htb"]
+    broke = []
+    for m in core:
+        try:
+            importlib.import_module(m)
+        except Exception as e:
+            broke.append((m, f"{type(e).__name__}: {e}"))
+    if not broke:
+        check(OK, "core-imports", f"all {len(core)} core modules import")
+    else:
+        for m, err in broke:
+            check(FAIL, f"import:{m}", err,
+                  "this usually means a missing package (see pkg checks) or a file "
+                  "did not survive the export — send this report to Ben")
+
+
+def check_governed_seam():
+    """The headline 'governed door'. Depends on the `battlestation` engine package,
+    which the seam imports from a HARDCODED path — the classic thing that breaks on
+    a machine that is not the author's."""
+    try:
+        import governed_seam  # noqa: F401
+        check(OK, "governed-seam", "governance engine importable; full governed mode available")
+        return
+    except Exception as e:
+        # figure out WHY, precisely, so the report is actionable
+        detail = f"{type(e).__name__}: {e}"
+        hard_path = None
+        try:
+            src = (ROOT / "live" / "governed_seam.py").read_text()
+            m = re.search(r'^\s*BS2\s*=\s*["\']([^"\']+)["\']', src, re.M)
+            if m:
+                hard_path = m.group(1)
+        except Exception:
+            pass
+        extra = ""
+        if hard_path and not os.path.isdir(hard_path):
+            extra = (f" — governed_seam.py hardcodes battlestation at '{hard_path}', "
+                     f"which does not exist here")
+        if HITL:
+            # HITL-always does NOT use the seam; its absence is expected, not a problem.
+            check(OK, "governed-seam", "not present (fine for HITL-always — the seam is a "
+                  "separate capability layer you are not using; HITL approval is independent)")
+        else:
+            check(WARN, "governed-seam",
+                  f"UNAVAILABLE ({detail}){extra}. "
+                  f"HITL approval + the witnessed-fallback door still work; the capability "
+                  f"seam (TTL/risk ceilings/hash-chained audit) does NOT.",
+                  "governed mode needs the `battlestation` engine package, which is not "
+                  "bundled in this repo — TELL BEN (send this report). Until then run in "
+                  "witnessed-fallback mode (do not set BS2_SEAM_RUN / GB_GOVERNED_HOST).")
+
+
+def _which(tool):
+    return shutil.which(tool) is not None
+
+
+def check_system_tools():
+    hard = {"curl": "transport of nearly every probe/governed call",
+            "nmap": "hands recon sweeps"}
+    soft = ["nc", "gobuster", "ffuf", "searchsploit", "smbclient",
+            "enum4linux", "hydra", "sqlmap", "nuclei"]
+    for tool, why in hard.items():
+        if _which(tool):
+            check(OK, f"tool:{tool}", why)
+        else:
+            check(FAIL, f"tool:{tool}", f"not on PATH — {why}",
+                  f"install it (e.g. `sudo apt install -y {tool}`)")
+    absent = [t for t in soft if not _which(t)]
+    if not absent:
+        check(OK, "tool:optional", "all optional lanes' tools present")
+    else:
+        check(WARN, "tool:optional", "missing: " + ", ".join(absent) +
+              " — those lanes report absent and skip; the engine degrades, never fails",
+              "sudo apt install -y " + " ".join(t if t != 'nc' else 'netcat-openbsd' for t in absent))
+
+
+def check_model_config():
+    base = os.environ.get("TROOPER_BASE", "").strip()
+    model = os.environ.get("TROOPER_MODEL", "").strip()
+    keyf = os.environ.get("TROOPER_KEY_FILE", "").strip()
+    if not (base and model):
+        check(WARN, "trooper-model", "TROOPER_BASE / TROOPER_MODEL not set — the executor "
+              "cannot run until you point it at a model",
+              "export TROOPER_BASE=<https://api.your-provider.com/v1> "
+              "TROOPER_MODEL=<model> (any OpenAI-compatible endpoint)")
+    else:
+        check(OK, "trooper-model", f"{model} @ {base}")
+    if keyf:
+        p = Path(os.path.expanduser(keyf))
+        if not p.exists():
+            check(WARN, "trooper-key", f"TROOPER_KEY_FILE={keyf} does not exist — the "
+                  "executor can't authenticate until it does (not an init defect)",
+                  "create a 0600 file containing ONLY your API key")
+        else:
+            mode = p.stat().st_mode
+            if mode & 0o077:
+                check(WARN, "trooper-key", f"{keyf} is group/world-readable (mode "
+                      f"{oct(mode & 0o777)})", f"chmod 600 {keyf}")
+            elif p.stat().st_size == 0:
+                check(WARN, "trooper-key", f"{keyf} is empty", "put your API key in it")
+            else:
+                check(OK, "trooper-key", f"{keyf} present, 0600, non-empty")
+    else:
+        check(WARN, "trooper-key", "TROOPER_KEY_FILE not set (fine if your endpoint needs no key)",
+              "export TROOPER_KEY_FILE=~/.config/bs2/trooper.key  # a 0600 file")
+    if _which("claude"):
+        check(OK, "manager-cli", "`claude` CLI on PATH (default manager backend)")
+    else:
+        check(WARN, "manager-cli", "`claude` CLI not on PATH — the canonical engine calls "
+              "the manager through it; any equivalent model interface works too "
+              "(manager/run_htb.py::call_manager)",
+              "install Claude Code and authenticate once, or wire your own manager backend")
+
+
+def _valid_cidr(sel):
+    """Mirror the door's ipaddress.ip_network(strict=True) contract — catch the
+    '198.51.100.10/16 has host bits set' class before it blows up a run."""
+    import ipaddress
+    sel = str(sel).rstrip(".").lower()
+    if sel.startswith("*."):
+        return True, ""
+    try:
+        ipaddress.ip_network(sel, strict=True)
+        return True, ""
+    except ValueError as e:
+        # a bare host (no mask) is allowed by the door's host-match branch
+        try:
+            ipaddress.ip_address(sel)
+            return True, ""
+        except ValueError:
+            return False, str(e)
+
+
+def check_policy():
+    path = os.environ.get("BS2_GOVERNANCE_POLICY", "").strip()
+    if not path:
+        tier = FAIL if HITL else WARN
+        extra = " — HITL-always REQUIRES a policy; without it the door runs UNGOVERNED" if HITL else \
+                " — the runtime scope floor and per-command broker are OFF (legacy mode: " \
+                "destructive-guard + witnessed audit only)"
+        check(tier, "policy", "BS2_GOVERNANCE_POLICY not set" + extra,
+              "cp policy.example.json ~/.config/bs2/policy.json ; chmod 600 it ; "
+              "export BS2_GOVERNANCE_POLICY=~/.config/bs2/policy.json")
+        return
+    p = Path(os.path.expanduser(path))
+    if not p.exists():
+        check(FAIL, "policy", f"BS2_GOVERNANCE_POLICY={path} does not exist",
+              "point it at a real policy file (see policy.example.json)")
+        return
+    # perms: the door fails-closed if the policy or its dir is group/world accessible
+    st = p.stat()
+    dst = p.parent.stat()
+    if (st.st_mode & 0o077) or (dst.st_mode & 0o077):
+        check(FAIL, "policy-perms", f"{path} or its directory is group/world accessible — "
+              f"the door will REJECT every command (fail-closed)",
+              f"chmod 600 {path} && chmod 700 {p.parent}")
+        return
+    try:
+        pol = json.loads(p.read_text())
+    except Exception as e:
+        check(FAIL, "policy", f"not valid JSON: {e}", "fix the JSON syntax")
+        return
+    mode = pol.get("network_mode")
+    if mode not in ("deny", "loopback_only", "scope_only"):
+        check(FAIL, "policy", f"network_mode={mode!r} is invalid",
+              'set it to "deny", "loopback_only", or "scope_only"')
+        return
+    bad = []
+    for sel in pol.get("allowed_hosts", []):
+        ok, err = _valid_cidr(sel)
+        if not ok:
+            bad.append(f"{sel} ({err})")
+    if bad:
+        check(FAIL, "policy-scope", "allowed_hosts has non-canonical entries: " + "; ".join(bad),
+              "e.g. use 10.10.10.0/24 not 10.10.10.5/24, or a bare host 10.10.10.5")
+    else:
+        check(OK, "policy", f"mode={mode}, {len(pol.get('allowed_hosts', []))} scope entr(ies), safe perms")
+
+
+def check_broker():
+    url = os.environ.get("BS2_GOVERNANCE_BROKER_URL", "").strip()
+    tok = os.environ.get("BS2_GOVERNANCE_BROKER_TOKEN", "").strip()
+    if not url:
+        tier = FAIL if HITL else WARN
+        extra = " — HITL-always REQUIRES the broker; nothing will prompt you without it" if HITL else \
+                " — per-command HITL approval is off (only meaningful once a policy is configured)"
+        check(tier, "broker", "BS2_GOVERNANCE_BROKER_URL not set" + extra,
+              "start it: python3 live/broker/bs2_cli_broker.py ; then approve with bs2-gate")
+        return
+    if not tok:
+        check(FAIL, "broker", "broker URL set but BS2_GOVERNANCE_BROKER_TOKEN missing — every "
+              "command fails closed", "export the token the broker printed on startup")
+        return
+    m = re.match(r"https?://([^/:]+):(\d+)", url)
+    if not m:
+        check(WARN, "broker", f"cannot parse host:port from {url}", "")
+        return
+    host, port = m.group(1), int(m.group(2))
+    s = socket.socket(); s.settimeout(3)
+    try:
+        s.connect((host, port))
+        check(OK, "broker", f"reachable at {host}:{port}")
+    except Exception as e:
+        check(FAIL, "broker", f"URL set but not reachable at {host}:{port} ({type(e).__name__})",
+              "start the broker: python3 live/broker/bs2_cli_broker.py")
+    finally:
+        s.close()
+
+
+def _proc_running(needle):
+    """Best-effort: is a process whose cmdline contains `needle` alive? (Linux /proc).
+    Returns True/False, or None when it can't tell (no /proc)."""
+    try:
+        pids = [p for p in os.listdir("/proc") if p.isdigit()]
+    except Exception:
+        return None
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                if needle.encode() in fh.read():
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+def check_hitl():
+    """Only runs in HITL-always mode. Verifies the invariant the operator actually wants:
+    the door fails closed without approval, AND someone is there to approve."""
+    if not HITL:
+        return
+    door_on = os.environ.get("BS2_REQUIRE_HITL", "").strip().lower() in ("1", "true", "yes", "on")
+    if door_on:
+        check(OK, "hitl-enforced", "BS2_REQUIRE_HITL set — the door fails closed unless "
+              "per-command approval is fully wired")
+    else:
+        check(FAIL, "hitl-enforced", "running HITL-always checks, but BS2_REQUIRE_HITL is not "
+              "exported — the door will NOT fail closed if approval is unwired",
+              "export BS2_REQUIRE_HITL=1 in the same profile/shell that launches BS2")
+    gate = _proc_running("bs2_gate.py")
+    svc = _proc_running("servicer.py")
+    if gate is None:
+        check(WARN, "hitl-approver", "cannot detect a running approver on this platform — "
+              "ensure `bs2-gate` (interactive) or the servicer is running to answer prompts")
+    elif gate or svc:
+        check(OK, "hitl-approver",
+              ("bs2-gate (interactive)" if gate else "servicer (policy)") +
+              " is running to answer approval prompts")
+    else:
+        check(WARN, "hitl-approver", "no bs2-gate / servicer process found — commands will "
+              "queue and TIME OUT (fail closed) with nobody to approve them",
+              "run in a terminal: python3 live/broker/bs2_gate.py")
+
+
+# =========================================================================================
+# REPORT
+# =========================================================================================
+def emit_report(sha, when):
+    fails = [(n, d) for s, n, d, _ in results if s == FAIL]
+    warns = [(n, d) for s, n, d, _ in results if s == WARN]
+    lines = []
+    lines.append("BS2 (bs2-harness) initialization health check")
+    lines.append(f"repo    : {REPO_SLUG} @ {sha} ({when})")
+    lines.append(f"host    : {platform.system()} {platform.release()} {platform.machine()}")
+    lines.append(f"python  : {platform.python_version()}")
+    lines.append(f"time    : {time.strftime('%Y-%m-%dT%H:%M:%S%z')}")
+    lines.append(f"doctor  : v{DOCTOR_VERSION}")
+    lines.append(f"result  : {len(fails)} FAIL, {len(warns)} WARN")
+    if fails:
+        lines.append("")
+        lines.append("HARD FAILURES (BS2 will not initialize):")
+        for n, d in fails:
+            lines.append(f"  - {n}: {d}")
+    if warns:
+        lines.append("")
+        lines.append("DEGRADED (runs, but reduced):")
+        for n, d in warns:
+            lines.append(f"  - {n}: {d}")
+    return "\n".join(lines)
+
+
+def main():
+    print(f"\n{C['b']}BS2 doctor{C['rst']} — checking this environment before you run anything\n"
+          f"{C['dim']}repo: {ROOT}{C['rst']}\n")
+    if HITL:
+        print(f"{C['cyn']}mode: HITL-always{C['rst']} "
+              f"{C['dim']}(approval required on every command; seam layer not used){C['rst']}\n")
+    check_python()
+    check_python_packages()
+    check_core_imports()
+    check_governed_seam()
+    check_system_tools()
+    check_model_config()
+    check_policy()
+    check_broker()
+    check_hitl()
+
+    sha, when = repo_fingerprint()
+    n_fail = sum(1 for s, *_ in results if s == FAIL)
+    n_warn = sum(1 for s, *_ in results if s == WARN)
+    report = emit_report(sha, when)
+
+    # write the report to a file the friend can attach
+    out = ROOT / "bs2-doctor-report.txt"
+    try:
+        out.write_text(report + "\n")
+    except Exception:
+        out = None
+
+    print()
+    if n_fail:
+        bar = "=" * 72
+        print(f"{C['red']}{bar}{C['rst']}")
+        print(f"{C['red']}{C['b']}  BS2 CANNOT INITIALIZE — {n_fail} hard failure(s), {n_warn} warning(s){C['rst']}")
+        print(f"{C['red']}{bar}{C['rst']}\n")
+        print(f"{C['ylw']}{C['b']}>>> COPY EVERYTHING BETWEEN THE LINES AND SEND IT TO BEN <<<{C['rst']}\n")
+        print(f"{C['dim']}" + "-" * 72 + f"{C['rst']}")
+        print(report)
+        print(f"{C['dim']}" + "-" * 72 + f"{C['rst']}")
+        if out:
+            print(f"\n{C['dim']}(also saved to {out} — you can attach that file){C['rst']}")
+        print(f"\n{C['b']}Message to Ben:{C['rst']} \"Hey Ben — BS2 won't start on my box, "
+              f"here's the doctor report ^\"")
+        return 2
+    elif n_warn:
+        print(f"{C['ylw']}{C['b']}BS2 core is OK, with {n_warn} degraded item(s) above.{C['rst']}")
+        print(f"{C['dim']}Fine to proceed; the warned lanes are optional. If a warned item "
+              f"matters to you, the report below is what to send Ben.{C['rst']}\n")
+        print(f"{C['dim']}" + "-" * 72 + f"{C['rst']}")
+        print(report)
+        print(f"{C['dim']}" + "-" * 72 + f"{C['rst']}")
+        return 1
+    else:
+        print(f"{C['grn']}{C['b']}All checks passed — BS2 is ready to initialize.{C['rst']}")
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
