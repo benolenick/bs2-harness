@@ -54,6 +54,6 @@ def test_per_host_budget_is_reserved_before_execution(monkeypatch, tmp_path):
     monkeypatch.setenv("BS2_GOVERNANCE_POLICY", str(_policy(tmp_path)))
     monkeypatch.setattr(target_exec, "_command_approval", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(target_exec, "_run_governed", lambda *_: "ok")
-    assert target_exec.run("curl http://10.10.10.7", "10.10.10.7") == "ok"
-    assert target_exec.run("curl http://10.10.10.7/a", "10.10.10.7") == "ok"
-    assert "budget exhausted (2/2)" in target_exec.run("curl http://10.10.10.7/b", "10.10.10.7")
+    assert target_exec._runtime_guard("10.10.10.7", reserve=True) is None
+    assert target_exec._runtime_guard("10.10.10.7", reserve=True) is None
+    assert "budget exhausted (2/2)" in target_exec._runtime_guard("10.10.10.7", reserve=True)

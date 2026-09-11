@@ -50,8 +50,7 @@ if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
 # HITL-always mode: the operator wants human approval on EVERY command. Turned on by
 # `--require-hitl` or BS2_REQUIRE_HITL truthy. In this mode an unwired approval path is a
 # HARD failure (not a warning), and the governed-seam package being absent is informational.
-HITL = ("--require-hitl" in sys.argv or "--hitl" in sys.argv
-        or os.environ.get("BS2_REQUIRE_HITL", "").strip().lower() in ("1", "true", "yes", "on"))
+HITL = True  # 0.2: approval is mandatory; the old opt-out no longer exists.
 
 # --json: emit one machine-readable object instead of the human panel, so an AI assistant
 # driving BS2 can parse the health result and surface failures to its operator.
@@ -141,10 +140,14 @@ def check_core_imports():
             "bs2_cli_broker", "bs2_gate", "bs2_approve", "run_htb"]
     broke = []
     for m in core:
+        before = dict(os.environ)
         try:
             importlib.import_module(m)
         except Exception as e:
             broke.append((m, f"{type(e).__name__}: {e}"))
+        finally:
+            os.environ.clear()
+            os.environ.update(before)
     if not broke:
         check(OK, "core-imports", f"all {len(core)} core modules import")
     else:
@@ -158,6 +161,9 @@ def check_governed_seam():
     """The headline 'governed door'. Depends on the `battlestation` engine package,
     which the seam imports from a HARDCODED path — the classic thing that breaks on
     a machine that is not the author's."""
+    if not os.environ.get("BS2_ENGINE_DIR"):
+        check(OK, "governed-seam", "legacy external capability engine not selected; portable pinned-HTTP runtime is independent")
+        return
     try:
         import governed_seam  # noqa: F401
         check(OK, "governed-seam", "governance engine importable; full governed mode available")
@@ -370,7 +376,7 @@ def check_hitl():
     the door fails closed without approval, AND someone is there to approve."""
     if not HITL:
         return
-    door_on = os.environ.get("BS2_REQUIRE_HITL", "").strip().lower() in ("1", "true", "yes", "on")
+    door_on = True  # execution requires approval irrespective of legacy env toggle
     if door_on:
         check(OK, "hitl-enforced", "BS2_REQUIRE_HITL set — the door fails closed unless "
               "per-command approval is fully wired")
@@ -524,6 +530,31 @@ def explain(marker):
     return 0 if hits else 3
 
 
+def check_runtime():
+    directory = os.environ.get("BS2_RUN_DIR")
+    if not directory:
+        check(FAIL, "durable-session", "BS2_RUN_DIR is missing; target execution will refuse",
+              "export BS2_RUN_DIR to a private persistent assessment directory (mode 700)")
+    else:
+        p = Path(directory)
+        if p.exists() and p.stat().st_mode & 0o077:
+            check(FAIL, "durable-session", "session directory is not private", "chmod 700 the assessment directory")
+        else:
+            check(OK, "durable-session", "persistent assessment path configured")
+    try:
+        pol = json.loads(Path(os.environ.get("BS2_GOVERNANCE_POLICY", "")).read_text())
+        ports = pol.get("allowed_ports", [])
+        if not ports or not all(type(p) is int and 1 <= p <= 65535 for p in ports):
+            check(FAIL, "destination-ports", "policy.allowed_ports must explicitly list authorized ports",
+                  "edit RoE policy allowed_ports, e.g. [80, 443]")
+        else:
+            check(OK, "destination-ports", "explicit destination ports configured")
+    except (OSError, ValueError):
+        pass  # reported by check_policy
+    check(WARN, "containment", "pinned HTTP only: no shell, proxy, redirect, cookie-file, SSH or arbitrary network tools",
+          "use the documented curl subset / bs2 check-read; a general network sandbox backend is not bundled")
+
+
 def main():
     if "--explain" in sys.argv:
         i = sys.argv.index("--explain")
@@ -545,6 +576,7 @@ def main():
     check_broker()
     check_hitl()
     check_scope_env()
+    check_runtime()
 
     sha, when = repo_fingerprint()
     n_fail = sum(1 for s, *_ in results if s == FAIL)

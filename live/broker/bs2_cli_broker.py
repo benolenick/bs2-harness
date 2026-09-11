@@ -16,7 +16,10 @@ bs2_approve.py). Timeout, malformed decision, or shutdown => deny (fail-closed).
 
 The token is compared in constant time; a wrong/absent token => 403 deny.
 """
-import hashlib, hmac, json, os, sys, time
+import hashlib, hmac, json, os, sys, time, sqlite3
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from bs2.approval import validate_request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 STATE = os.environ.get("BS2_BROKER_STATE",
@@ -47,18 +50,35 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_POST(self):
+        self.connection.settimeout(10)
         tok = self.headers.get("X-BS2-Broker-Token", "")
         if not hmac.compare_digest(tok, self.server.token):
             return self._send(403, {"error": {"code": "bad_token"}})
         try:
             n = int(self.headers.get("Content-Length", 0))
+            if not 0 < n <= 65536:
+                raise ValueError("request length out of bounds")
             body = json.loads(self.rfile.read(n))
+            if not validate_request(body):
+                raise ValueError("invalid exact execution binding")
         except Exception:
             return self._send(400, {"error": {"code": "malformed_request"}})
 
+        # Durable nonce consumption prevents replay across concurrent requests
+        # and broker restarts. A retry needs a fresh request and fresh approval.
+        con = sqlite3.connect(os.path.join(STATE, "nonces.sqlite3"), timeout=10)
+        try:
+            with con:
+                con.execute("CREATE TABLE IF NOT EXISTS nonces (nonce TEXT PRIMARY KEY, expires REAL NOT NULL)")
+                con.execute("INSERT INTO nonces VALUES(?,?)", (body["nonce"], body["expires_at"]))
+        except sqlite3.IntegrityError:
+            return self._send(409, {"error": {"code": "replayed_request"}})
+        finally:
+            con.close()
+
         rid = _req_id(body)
-        record = {"id": rid, "ts": time.time(), **body}
-        with open(os.path.join(PENDING, rid + ".json"), "w") as f:
+        record = {**body, "id": rid, "ts": time.time()}
+        with os.fdopen(os.open(os.path.join(PENDING, rid + ".json"), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
             json.dump(record, f, indent=2)
         os.chmod(os.path.join(PENDING, rid + ".json"), 0o600)
 
@@ -71,7 +91,7 @@ class Handler(BaseHTTPRequestHandler):
             f"    approve: bs2-approve allow {rid}   deny: bs2-approve deny {rid}\n")
         sys.stderr.flush()
 
-        deadline = time.time() + self.server.approval_timeout
+        deadline = min(time.time() + self.server.approval_timeout, body["expires_at"])
         dpath = os.path.join(DECIDED, rid + ".json")
         while time.time() < deadline:
             if os.path.exists(dpath):
@@ -80,15 +100,18 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     return self._send(200, {"data": {"allowed": False,
                                                       "status": "malformed_decision"}})
-                allowed = dec.get("allow") is True
+                bound = all(dec.get(k) == body[k] for k in ("request_digest", "nonce", "expires_at"))
+                allowed = dec.get("allow") is True and bound and time.time() < deadline
                 # consume pending
                 try: os.remove(os.path.join(PENDING, rid + ".json"))
                 except OSError: pass
-                status = "approved" if allowed else dec.get("reason", "denied")
+                status = "approved" if allowed else "denied_or_binding_mismatch"
                 return self._send(200, {"data": {"allowed": allowed, "status": status,
-                                                  "id": rid}})
+                                                  "id": rid, **{k: body[k] for k in ("request_digest", "nonce", "expires_at")}}})
             time.sleep(POLL)
         # timeout => fail closed
+        try: os.remove(os.path.join(PENDING, rid + ".json"))
+        except OSError: pass
         return self._send(200, {"data": {"allowed": False, "status": "approval_timeout",
                                          "id": rid}})
 
@@ -100,6 +123,8 @@ def main():
     with open(TOKEN_FILE, "w") as f: f.write(token)
     os.chmod(TOKEN_FILE, 0o600)
     host = os.environ.get("BS2_BROKER_HOST", "127.0.0.1")
+    if host != "127.0.0.1":
+        raise SystemExit("broker must bind 127.0.0.1; use a private tunnel for remote operators")
     port = int(os.environ.get("BS2_BROKER_PORT", "8129"))
     approval_timeout = int(os.environ.get("BS2_BROKER_APPROVAL_TIMEOUT", "300"))
     srv = ThreadingHTTPServer((host, port), Handler)

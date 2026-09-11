@@ -1,33 +1,21 @@
 #!/usr/bin/env python3
-"""target_exec — the single, physically-exclusive target-contact primitive (§10.1).
-
-BS2-CONTROL-SYSTEM-CRITIQUE.md §10.1: "Execution is not physically exclusive. Direct Bash,
-SSH, subprocess, recipe, hands, specialist, and launcher paths can touch the target outside
-one governed adapter." This module is the fix: EVERY target-facing command in gunbelt runs
-through `run()` here and nowhere else. Collapsing recipes.sh(), trooper.run_cmd(),
-hands._jagg(), and the engine onto this one function is what makes execution *physically*
-exclusive instead of exclusive-by-convention.
-
-Two modes, chosen by whether a governed seam is open:
-
-  GOVERNED  (env BS2_SEAM_RUN points at an open seam run-dir — locally, OR
-      GB_GOVERNED_HOST + GB_GOVERNED_SEAM_DIR dispatch it via ssh to the exec host
-      where the target is reachable)
-      Route through the one door — governed_seam.py `exec` -> GovernedExecutor.execute():
-      default-deny gate, impact classification, hash-chained audit, scrubbed event stream.
-      Fail-CLOSED: if the governed call errors, we return a deny marker; we never silently
-      fall back to an ungoverned shell when governance was requested (including when the
-      remote dispatch config is incomplete).
-
-  WITNESSED FALLBACK  (no seam — the current live manager/trooper runs)
-      Run via the deadlock-safe capture (local, or a short-lived ssh to TROOPER_EXEC_SSH),
-      exactly as before — BUT append every command to ONE witnessed audit trail and apply a
-      destructive-command guard first, so target contact is never invisible even without a
-      full seam. Behaviour is otherwise byte-identical to the old recipes.sh()/run_cmd().
+"""Single supported target-contact door for BS2 0.2.
+Mandatory scope + exact approval + budget + durable intent + pinned HTTP transport.
+No shell, SSH, optional-seam or witnessed fallback. Arbitrary network tools require
+a future audited sandbox backend. Historical helper names fail closed.
 """
 from __future__ import annotations
 import contextlib, fcntl, hashlib, ipaddress, json, os, re, shlex, signal, socket, stat, subprocess, tempfile, threading, time
 import urllib.error, urllib.parse, urllib.request
+import sys
+from pathlib import Path
+# Direct scripts (live/autocannon.py etc.) also need the packaged runtime.
+_ROOT = str(Path(__file__).resolve().parents[1])
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+from bs2.journal import digest, Journal
+from bs2.memory import BattleMemory
+from bs2 import transport
 
 CMD_TIMEOUT = int(os.environ.get("RECIPE_CMD_TIMEOUT", "30"))
 _GOVERNANCE_CONTEXT = threading.local()
@@ -118,7 +106,7 @@ def _runtime_guard(target, *, reserve=True):
     """
     path = os.environ.get("BS2_GOVERNANCE_POLICY", "").strip()
     if not path:
-        return None
+        return "runtime policy is required"
     try:
         policy_stat = os.stat(path)
         root_stat = os.stat(os.path.dirname(path))
@@ -194,7 +182,7 @@ def _runtime_guard(target, *, reserve=True):
 
 
 def _command_approval(cmd, target, action_class, timeout, *, estimated_cost_minor=None,
-                      currency="USD", run_id=None, assessment_id=None):
+                      currency="USD", run_id=None, assessment_id=None, binding=None):
     """Block on the local Battlestation human queue before one exact command.
 
     The broker is mandatory whenever a BS2 runtime policy is configured.  The
@@ -203,7 +191,7 @@ def _command_approval(cmd, target, action_class, timeout, *, estimated_cost_mino
     """
     policy_path = os.environ.get("BS2_GOVERNANCE_POLICY", "").strip()
     if not policy_path:
-        return None
+        return "runtime policy is required"
     broker = os.environ.get("BS2_GOVERNANCE_BROKER_URL", "").strip()
     token = os.environ.get("BS2_GOVERNANCE_BROKER_TOKEN", "").strip()
     if not broker or not token:
@@ -211,7 +199,7 @@ def _command_approval(cmd, target, action_class, timeout, *, estimated_cost_mino
     try:
         with open(policy_path, encoding="utf-8") as handle:
             policy = json.load(handle)
-        approval_timeout = int(policy.get("command_approval_timeout_seconds", 300))
+        approval_timeout = min(600, max(1, int(policy.get("command_approval_timeout_seconds", 300))))
     except Exception as exc:
         return f"command approval policy unavailable ({type(exc).__name__})"
     body = {
@@ -245,6 +233,19 @@ def _command_approval(cmd, target, action_class, timeout, *, estimated_cost_mino
     body["resolved_ips"] = resolved_ips
     if estimated_cost_minor is not None:
         body["estimated_cost_minor"] = estimated_cost_minor
+    if not binding:
+        return "exact execution binding missing"
+    body.update(binding)
+    body["nonce"] = os.urandom(16).hex()
+    body["expires_at"] = time.time() + approval_timeout
+    body["request_digest"] = digest(body)
+    parsed_broker = urllib.parse.urlsplit(broker)
+    if parsed_broker.scheme != "http" or parsed_broker.hostname not in ("127.0.0.1", "::1") or parsed_broker.username:
+        return "approval broker must be a numeric loopback HTTP endpoint"
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     request = urllib.request.Request(
         broker,
         data=json.dumps(body, sort_keys=True, separators=(",", ":")).encode(),
@@ -255,8 +256,8 @@ def _command_approval(cmd, target, action_class, timeout, *, estimated_cost_mino
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=approval_timeout + 10) as response:
-            payload = json.loads(response.read())
+        with opener.open(request, timeout=approval_timeout + 10) as response:
+            payload = json.loads(response.read(65537))
     except urllib.error.HTTPError as exc:
         try:
             payload = json.loads(exc.read())
@@ -270,6 +271,10 @@ def _command_approval(cmd, target, action_class, timeout, *, estimated_cost_mino
     if not isinstance(data, dict) or data.get("allowed") is not True:
         status = data.get("status", "invalid_response") if isinstance(data, dict) else "invalid_response"
         return f"per-command approval denied ({status})"
+    if (data.get("request_digest") != body["request_digest"] or data.get("nonce") != body["nonce"]
+            or data.get("expires_at") != body["expires_at"] or time.time() >= body["expires_at"]):
+        return "approval binding mismatch or expired"
+    _GOVERNANCE_CONTEXT.approval = {k: data[k] for k in ("request_digest", "nonce", "expires_at", "id")}
     return None
 
 
@@ -302,25 +307,7 @@ def _raw(cmd, action_class, mode, output):
 
 # ---- deadlock-safe capture (the temp-file/own-session pattern shared by both callers) ------
 def _capture(argv, timeout):
-    """Run argv; return combined stdout+stderr. A backgrounded child (nc -lvnp &, chisel)
-    inherits the stdout pipe, so a plain capture_output read never sees EOF and wedges the
-    engine forever. Route output to a temp FILE, detach into its own session, kill the whole
-    process group on timeout."""
-    try:
-        with tempfile.TemporaryFile(mode="w+", errors="replace") as tf:
-            p = subprocess.Popen(argv, stdout=tf, stderr=subprocess.STDOUT,
-                                 stdin=subprocess.DEVNULL, text=True, start_new_session=True)
-            try:
-                p.wait(timeout=timeout)
-                tf.seek(0); return tf.read()
-            except subprocess.TimeoutExpired:
-                try: os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-                except Exception: pass
-                try: p.wait(timeout=5)
-                except Exception: pass
-                tf.seek(0); return tf.read() + "\n(timeout)"
-    except Exception as e:
-        return f"(error: {e})"
+    raise RuntimeError("uncontained capture removed; use the supported target door")
 
 
 def _governed_target():
@@ -342,54 +329,13 @@ def _governed_target():
     seam = os.environ.get("BS2_SEAM_RUN", "").strip()
     if seam and os.path.isdir(seam):
         return {"mode": "local", "seam": seam}
+    if seam:
+        return {"mode": "refused", "msg": "[GOVERNED CONFIG (fail-closed, not run): configured seam directory is missing]"}
     return {"mode": "off"}
 
 
 def _run_governed(cmd, action_class, timeout):
-    """Route one command through the governed door — locally, or dispatched via ssh to
-    the exec host. Returns None when no seam is open (caller uses the witnessed
-    fallback); fail-closed on error, on deny, and on incomplete config."""
-    gt = _governed_target()
-    if gt["mode"] == "off":
-        return None
-    if gt["mode"] == "refused":
-        _audit({"mode": "governed", "class": action_class, "cmd_sha": _sha(cmd),
-                "result": "refused", "detail": gt["msg"][:200]})
-        return gt["msg"]
-    risk = "low"
-    if _impact_mod is not None:
-        try:
-            risk = _IMPACT_RISK.get(_impact_mod.classify(cmd), "low")
-        except Exception:
-            pass
-    # The seam's contract is argv TOKENS (each preserved as one shell word) — a raw
-    # command blob would arrive quoted into one word and fail as 'no such file'.
-    # Wrap as `bash -lc <cmd>`: the seam quotes the three words faithfully and bash
-    # restores full shell semantics (&&, |, redirection) for the command string.
-    if gt["mode"] == "local":
-        seam_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "governed_seam.py")
-        argv = ["python3", seam_py, "exec", "--run-dir", gt["seam"],
-                "--class", action_class, "--risk", risk, "--", "bash", "-lc", cmd]
-        label = "local"
-    else:
-        remote = ["python3", gt["seam_py"], "exec", "--run-dir", gt["seam"],
-                  "--class", action_class, "--risk", risk, "--", "bash", "-lc", cmd]
-        argv = ["ssh", "-o", "ControlPath=none", "-o", "ConnectTimeout=8",
-                "-o", "BatchMode=yes", gt["host"], shlex.join(remote)]
-        label = f"remote:{gt['host']}"
-    try:
-        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout + 15)
-    except Exception as e:
-        _audit({"mode": "governed", "class": action_class, "host": label,
-                "cmd_sha": _sha(cmd), "result": "error", "detail": str(e)[:200]})
-        return f"[GOVERNED ERROR (fail-closed, not run): {e}]"
-    if p.returncode == 0:
-        _audit({"mode": "governed", "class": action_class, "host": label,
-                "cmd_sha": _sha(cmd), "result": "allowed"})
-        return p.stdout
-    _audit({"mode": "governed", "class": action_class, "host": label,
-            "cmd_sha": _sha(cmd), "result": "denied", "detail": (p.stderr or "")[-200:]})
-    return f"[GOVERNED DENY: {(p.stderr or '').strip()[-160:]}]"
+    return "[target-exec BLOCKED: legacy seam execution has no supported containment contract]"
 
 
 def _sha(cmd):
@@ -422,9 +368,6 @@ def _require_hitl_gate():
     set the policy makes `_command_approval` return None (no gate) and the witnessed
     fallback runs UNGOVERNED. This gate fails closed for operators who want HITL always.
     """
-    val = os.environ.get("BS2_REQUIRE_HITL", "").strip().lower()
-    if val in ("", "0", "false", "no", "off"):
-        return None
     missing = [name for name in _HITL_ENV if not os.environ.get(name, "").strip()]
     if missing:
         return ("BS2_REQUIRE_HITL is set but per-command approval is not wired "
@@ -461,20 +404,14 @@ def _denylist_extra_block(cmd):
 
 def run(cmd, target=None, *, action_class="web.exploit", timeout=None, ssh_host=None,
         estimated_cost_minor=None, currency="USD", run_id=None, assessment_id=None):
-    """THE single target-contact primitive. Returns combined stdout+stderr (str).
-
-    - If BS2_REQUIRE_HITL is set, refuses unless per-command approval is fully wired.
-    - Applies the destructive-command guard.
-    - If a governed seam is open (BS2_SEAM_RUN), routes through the governed door (fail-closed).
-    - Otherwise runs the witnessed fallback: local, or a short-lived ssh to ssh_host
-      (defaults to TROOPER_EXEC_SSH), with the command appended to the audit trail.
+    """Exact reviewed HTTP request -> normalized output and durable structured receipt.
+    Scope, approval and journal are mandatory. Unsupported transports refuse.
     """
     timeout = CMD_TIMEOUT if timeout is None else timeout
-    hitl_bad = _require_hitl_gate()
-    if hitl_bad:
-        _audit({"mode": "require-hitl", "cmd_sha": _sha(cmd), "result": "blocked",
-                "detail": hitl_bad})
-        return f"[target-exec BLOCKED: {hitl_bad}]"
+    _GOVERNANCE_CONTEXT.approval = None
+    _GOVERNANCE_CONTEXT.last_receipt = None
+    if not os.environ.get("BS2_GOVERNANCE_POLICY"):
+        return f"[target-exec BLOCKED: {_require_hitl_gate()}]"
     roe_bad = _denylist_extra_block(cmd)
     if roe_bad:
         _audit({"mode": "roe-denylist", "cmd_sha": _sha(cmd), "result": "blocked",
@@ -489,42 +426,75 @@ def run(cmd, target=None, *, action_class="web.exploit", timeout=None, ssh_host=
         _audit({"mode": "runtime-guard", "cmd_sha": _sha(cmd), "result": "blocked",
                 "detail": runtime_bad})
         return f"[target-exec BLOCKED: {runtime_bad}]"
+    hitl_bad = _require_hitl_gate()
+    if hitl_bad:
+        return f"[target-exec BLOCKED: {hitl_bad}]"
+    if ssh_host or os.environ.get("TROOPER_EXEC_SSH") or os.environ.get("GB_GOVERNED_HOST") or os.environ.get("BS2_SEAM_RUN"):
+        return "[target-exec BLOCKED: legacy SSH/seam backend has no supported containment contract; no fallback]"
+    directory = os.environ.get("BS2_RUN_DIR", "")
+    if not directory:
+        return "[target-exec BLOCKED: BS2_RUN_DIR is required for durable receipts and Cairn]"
+    try:
+        policy_bytes = Path(os.environ["BS2_GOVERNANCE_POLICY"]).read_bytes()
+        policy = json.loads(policy_bytes)
+        plan = transport.prepare(cmd, target, policy, float(timeout))
+        if plan["method"] not in ("GET", "HEAD", "OPTIONS") and action_class in ("web.recon", "net.recon"):
+            action_class = "web.exploit"
+        memory = BattleMemory(directory)
+        conditions = {"principal": os.environ.get("BS2_PRINCIPAL_ID", "anonymous"),
+                      "session_epoch": os.environ.get("BS2_SESSION_EPOCH", "unknown"),
+                      "target_generation": os.environ.get("BS2_TARGET_GENERATION", "unknown")}
+        binding = {"execution": plan, "policy_digest": hashlib.sha256(policy_bytes).hexdigest(),
+                   "conditions": conditions, "battle": memory.entity, "resolved_ips": plan["resolved_ips"]}
+    except Exception as exc:
+        return f"[target-exec BLOCKED: {exc}]"
     approval_bad = _command_approval(
         cmd, target, action_class, timeout,
         estimated_cost_minor=estimated_cost_minor, currency=currency,
-        run_id=run_id, assessment_id=assessment_id,
+        run_id=run_id, assessment_id=assessment_id, binding=binding,
     )
     if approval_bad:
         _audit({"mode": "command-approval", "cmd_sha": _sha(cmd), "result": "blocked",
                 "detail": approval_bad})
         return f"[target-exec BLOCKED: {approval_bad}]"
+    try:
+        if hashlib.sha256(Path(os.environ["BS2_GOVERNANCE_POLICY"]).read_bytes()).hexdigest() != binding["policy_digest"]:
+            return "[target-exec BLOCKED: policy changed after approval]"
+    except OSError:
+        return "[target-exec BLOCKED: policy disappeared after approval]"
+    approval = getattr(_GOVERNANCE_CONTEXT, "approval", None)
+    if not approval or time.time() >= approval["expires_at"]:
+        return "[target-exec BLOCKED: missing or expired exact approval receipt]"
     runtime_bad = _runtime_guard(target, reserve=True)
     if runtime_bad:
         _audit({"mode": "runtime-guard", "cmd_sha": _sha(cmd), "result": "blocked",
                 "detail": runtime_bad})
         return f"[target-exec BLOCKED: {runtime_bad}]"
 
-    # governed door — local seam, or ssh-dispatch to the exec host (GB_GOVERNED_HOST)
-    # where tun0/HTB reachability lives. Fail-closed: a refusal/config error returns the
-    # marker, never the witnessed fallback.
-    out = _run_governed(cmd, action_class, timeout)
-    if out is not None:
-        _raw(cmd, action_class, "governed", out)
+    try:
+        # Durable intent precedes contact. An unmatched intent after a crash means
+        # unknown outcome, NEVER a negative or an automatic retry permission.
+        intent = memory.journal.append("intent", {"approval": approval, "backend": plan["backend"],
+                                      "conditions": conditions, "command_sha256": hashlib.sha256(cmd.encode()).hexdigest()})
+        if time.time() >= approval["expires_at"]:
+            return "[target-exec BLOCKED: approval expired before dispatch]"
+        out, result = transport.execute(plan)
+        result.update(conditions)
+        result.update({"approval_digest": approval["request_digest"], "intent_seq": intent["seq"],
+                       "backend": plan["backend"]})
+        receipt = memory.journal.append("observation", result)
+        _GOVERNANCE_CONTEXT.last_receipt = receipt
+        memory.fold().close()
+        _raw(cmd, action_class, plan["backend"], out)
         return out
-
-    # witnessed fallback — behaviourally identical to the old recipes.sh()/run_cmd()
-    host = (ssh_host if ssh_host is not None
-            else os.environ.get("TROOPER_EXEC_SSH", "").strip())
-    if host:
-        argv = ["ssh", "-o", "ControlPath=none", "-o", "ConnectTimeout=8",
-                "-o", "BatchMode=yes", host, "bash -lc " + shlex.quote(cmd)]
-    else:
-        argv = ["bash", "-lc", cmd]
-    _audit({"mode": "ungoverned", "class": action_class, "host": host or "local",
-            "cmd_sha": _sha(cmd), "result": "ran"})
-    out = _capture(argv, timeout)
-    _raw(cmd, action_class, "ungoverned", out)
-    return out
+    except Exception as exc:
+        try:
+            memory.journal.append("inconclusive", {"reason": type(exc).__name__, "conditions": conditions,
+                                                   "approval_digest": approval["request_digest"]})
+            memory.fold().close()
+        except Exception:
+            pass
+        return f"[target-exec INCONCLUSIVE: {type(exc).__name__}; do not interpret as a negative result]"
 
 
 __all__ = ["run", "governance_context", "CMD_TIMEOUT"]

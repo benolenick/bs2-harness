@@ -29,8 +29,9 @@ from __future__ import annotations
 import argparse, datetime as dt, hashlib, json, os, shlex, sys, uuid
 from pathlib import Path
 
-BS2 = "/mnt/sata/htb-bakeoff/bs2-governed-wt"
-sys.path.insert(0, BS2)
+BS2 = os.environ.get("BS2_ENGINE_DIR", "")
+if BS2:
+    sys.path.insert(0, BS2)
 from battlestation.service import BattleApplication              # noqa: E402
 
 import fcntl as _fcntl
@@ -182,6 +183,10 @@ def _load(run: Path):
 
 
 def cmd_exec(a):
+    # Archived external engine integration is not a supported 0.2 execution
+    # backend. Keeping read/report operations is useful; target execution must
+    # pass through the packaged exact-approval, pinned-destination runtime.
+    raise SystemExit("Legacy seam execution disabled in 0.2; use live.target_exec or bs2 check-read")
     run = Path(a.run_dir)
     # EMERGENCY STOP gate: once stopped, every dispatch is refused (fail-closed) even
     # though the ledger retains the issued capabilities. The stop marker is checked

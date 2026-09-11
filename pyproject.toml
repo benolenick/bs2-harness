@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bs2-harness"
+version = "0.2.0"
+description = "Governed assessment runtime with Cairn persistent memory"
+requires-python = ">=3.10"
+dependencies = ["PyYAML>=6", "requests>=2.31", "cryptography>=41"]
+license = {file = "LICENSE"}
+
+[project.optional-dependencies]
+test = ["pytest>=8", "Flask>=3", "playwright>=1.45"]
+
+[project.scripts]
+bs2-ui = "bs2.panel:main"
+bs2 = "bs2.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["bs2*", "cairn*", "live*", "manager*", "catalog*", "ariadne*"]
+exclude = ["*.tests*"]
+
+[tool.setuptools.package-data]
+bs2 = ["*.html", "*.js"]
+catalog = ["*.yaml", "*.json"]

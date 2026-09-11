@@ -15,6 +15,9 @@ Keys per prompt:
   q          deny this one and quit the gate (remaining commands fail closed)
 """
 import os, sys, json, time, select, termios, tty
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from bs2.approval import write_decision
 
 STATE = os.environ.get("BS2_BROKER_STATE", os.path.expanduser("~/.local/state/bs2-broker"))
 PEND = os.path.join(STATE, "pending"); DEC = os.path.join(STATE, "decisions")
@@ -23,10 +26,7 @@ C = dict(rst="\033[0m", b="\033[1m", ylw="\033[1;33m", grn="\033[1;32m",
          red="\033[1;31m", dim="\033[2m", cyn="\033[36m")
 
 def _decide(rid, allow, reason=""):
-    os.makedirs(DEC, exist_ok=True)
-    p = os.path.join(DEC, rid + ".json")
-    json.dump({"allow": allow, "reason": reason, "ts": time.time()}, open(p, "w"))
-    os.chmod(p, 0o600)
+    write_decision(STATE, rid, allow, reason)
 
 def _pending():
     if not os.path.isdir(PEND): return []

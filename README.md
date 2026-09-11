@@ -1,115 +1,105 @@
-# BS2 — a governed, model-agnostic pentest engine
+# BS2 — governed assessments with Cairn memory
 
-BS2 is an autonomous penetration-testing engine built around one non-negotiable
-idea: **every command that touches a target passes through a single governed door,
-and the human operator can approve or deny each one from the command line.**
+BS2 0.2 connects exact operator approvals, controlled HTTP verification, durable
+Cairn memory, and a read-only operator panel. Models propose work; execution and
+evidence decide what actually happened.
 
-It is model-agnostic. A capable frontier model (the "manager") authors each command
-from a live map of the target; a cheap local model (the "trooper") executes it on the
-box. The manager never touches the target directly — it reasons, the trooper triggers,
-and the governed door decides whether the trigger fires.
+**Breaking safety change:** the supported portable backend is pinned HTTP, not a
+general shell or multi-protocol scanner. Unsupported shell commands, SSH/seam
+dispatch, proxies, redirects and cookie files refuse rather than run uncontained.
+See [release notes](docs/RELEASE-0.2.md) before migrating an older campaign.
 
-## Why it's built this way
+## What's new
 
-- **Governance is the product.** `live/target_exec.py` is the *only* path to the
-  target. Order of gates, all fail-closed: destructive-command block → scope/allowlist
-  guard → per-command operator approval → budget → execute. Nothing reaches a box
-  around it.
-- **Human-in-the-loop, per command.** The broker (`live/broker/`) pauses every
-  box-touching command and waits for a decision. Approve interactively at a TTY
-  (`bs2-gate`), scriptably (`bs2-approve allow/deny <id>`), or under an unattended
-  policy (`servicer.py`). You see exactly what MIT-style harnesses show — the command,
-  the target, the action class — and you say yes or no.
-- **Model-agnostic executor.** Point the trooper at any OpenAI-compatible endpoint or
-  a local CLI (`TROOPER_BASE` / `TROOPER_MODEL` / `TROOPER_KEY_FILE`). The intelligence
-  lives in the manager's reasoning each step, never in frozen if-vuln-shape branches.
+- Exact, expiring approvals bind the command, HTTP execution plan, destination,
+  policy and assessment context. Scope and policy are rechecked before dispatch.
+- Your existing **Cairn** implementation now folds BS2 receipts automatically and
+  serves source-qualified memory before supported manager turns. It is distinct
+  from Cartographer's map and Memoria's advisory corpus. [Memory contract](docs/CAIRN.md).
+- Private-resource verification compares owner / other / anonymous requests plus
+  two authenticated identity controls. Model confidence is never proof.
+- Proven negative checks suppress only under matching conditions. Changed
+  sessions, principals, target generations or privacy contracts reopen them.
+- Browser panel: Known, Suspected, Already tried, Changed, Next check, tutor
+  explanation, exact served Cairn slice and source links.
 
-## What's in here
+## Install and configure
 
-| Component | Path | Role |
-|---|---|---|
-| Governed door | `live/target_exec.py` | the single gated path to any target |
-| Approval broker | `live/broker/` | HITL gate: interactive, scriptable, or policy |
-| Trooper | `live/trooper.py` | on-target executor (any model) |
-| Manager | `manager/`, `live/autocannon.py` | authors commands from the live map |
-| Cartographer / hands | `live/` | autonomous recon — builds the map itself |
-| Ariadne planner | `ariadne/` | attack-path planner the manager consults; advisory, served on `:8112` |
-| Catalog | `catalog/deck_final.yaml` | attack-recipe library (a library, never the decider) |
-| Scorer | `scorer/` | grounded verification of results |
-| Tests | `tests/` | governance + scorer integrity suites |
-
-## Deliberately NOT included
-
-- **No cheat-sheet playbook for the executor.** The trooper is never fed a static
-  answer-key — a capable frontier model authors the commands. (The Ariadne *planner*
-  under `ariadne/` does ship its own symbolic operator corpus + an offline Exploit-DB
-  *index* for path ranking; that is advisory input to the manager, not a trooper playbook.)
-- **No frontend.** This is the backend engine only.
-- **No secrets, no engagement transcripts.** Bring your own keys and scope.
-
-## Quickstart
+Python 3.10+:
 
 ```bash
-# 0. health-check this environment FIRST — it squawks loud on anything wrong and
-#    prints a report to send to the maintainer. Add --require-hitl to demand the
-#    human-in-the-loop path be fully wired (recommended).
-python3 scripts/bs2-doctor --require-hitl
-
-# 1. point the trooper at a model (any OpenAI-compatible endpoint)
-export TROOPER_BASE=https://api.your-provider.com/v1
-export TROOPER_MODEL=your-model
-export TROOPER_KEY_FILE=~/.config/bs2/trooper.key     # a 0600 file holding only the key
-
-# 2. wire the governed door: a scope policy + the approval broker. WITHOUT these the
-#    door has no per-command gate. BS2_REQUIRE_HITL=1 makes it fail closed if you
-#    forget any of them — the door refuses to run rather than run ungoverned.
-#
-#    EASIEST: run the Rules-of-Engagement wizard — a few questions (optionally after a
-#    gentle, read-only scan of the target) that write the policy for you and print the
-#    exact exports, including the right scope opt-in for your target:
-python3 scripts/bs2-roe
-#    …or do it by hand:
-cp policy.example.json ~/.config/bs2/policy.json      # edit network_mode + allowed_hosts
-chmod 600 ~/.config/bs2/policy.json
-export BS2_GOVERNANCE_POLICY=~/.config/bs2/policy.json
-export BS2_GOVERNANCE_BROKER_URL=http://127.0.0.1:8129
-export BS2_GOVERNANCE_BROKER_TOKEN=$(python3 -c 'import secrets;print(secrets.token_hex(32))')
-export BS2_REQUIRE_HITL=1
-
-# 3. start the operator approval gate in a terminal (interactive HITL)
-BS2_BROKER_PORT=8129 python3 live/broker/bs2_cli_broker.py &   # the broker (:8129)
-python3 live/broker/bs2_gate.py               # the TTY approver — y/n on every command
-
-# 4. (optional) start the Ariadne attack-path planner for path ranking
-bash scripts/start_ariadne.sh &               # serves :8112; advisory, safe to omit
-
-# 5. tell the recipe lanes which host is in scope, then run the manager
-export BS2_TARGET=198.51.100.10   # recipe-driven lanes gate on this; unset => "outside scope"
-
-# Pointing at a webapp YOU set up? The AI trooper hard-refuses loopback + LAN by default
-# (safety: it must never attack the operator's own box). Opt in for your authorized target, or
-# the recipe floor runs but every AI-improvised command is silently refused:
-#   • on 127.0.0.1 / localhost:  export GB_ALLOW_LOOPBACK=1 ; export GB_CHARTER_PORTS=8080,3000
-#   • on a LAN IP (192.168.x)  :  export GB_ALLOW_TARGET=1
-#   • on any other IP          :  nothing needed (allowed by default)
-# The destructive/GPU/VPN denies and the per-command HITL door apply regardless.
-
-python3 live/autocannon.py --target 198.51.100.10
-
-# 6. after the run: a clean governed write-up (RoE in force, what ran, what was gated
-#    and why, grounded facts) — the deliverable a governed engine can produce.
-python3 scripts/bs2-report
+python3 -m pip install -e '.[test]'
+python3 scripts/bs2-doctor --require-hitl --json
 ```
 
-Scope lives in a policy file (see `policy.example.json`): set `network_mode` and `allowed_hosts`. Anything outside scope is denied at the door, before approval. Every box-touching command then pauses at `bs2-gate` for your `y`/`n`. With `BS2_REQUIRE_HITL=1` the door refuses to run at all unless the policy + broker + token are all set, so you can never *accidentally* run without the human gate.
+The initial doctor should fail until scope, the broker and durable storage are
+configured. Apply its actionable fixes; never bypass a failure.
 
-> **Note on the capability seam.** BS2 also has an optional deeper layer (`BS2_SEAM_RUN` / `GB_GOVERNED_HOST` — capability TTL, risk ceilings, hash-chained audit) that depends on a separate governance engine package not bundled here. HITL approval above does **not** need it. Leave those variables unset for HITL-always operation; `tests/test_e2e_contract.py` and `tests/test_governed_dispatch.py` exercise that seam and are expected to skip/fail without the package.
+```bash
+mkdir -p ~/.config/bs2
+chmod 700 ~/.config/bs2
+cp policy.example.json ~/.config/bs2/policy.json
+chmod 600 ~/.config/bs2/policy.json
+# Edit allowed_hosts and allowed_ports to your explicitly authorized target.
+# Or use: python3 scripts/bs2-roe
+export BS2_GOVERNANCE_POLICY="$HOME/.config/bs2/policy.json"
+export BS2_GOVERNANCE_BROKER_URL=http://127.0.0.1:8129
+export BS2_GOVERNANCE_BROKER_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+export BS2_RUN_DIR="$HOME/.local/state/bs2/my-assessment"
+export BS2_TARGET=198.51.100.10
+```
 
-## Authorized use only
+In terminals sharing that environment:
 
-BS2 is for **authorized** security testing — engagements you have written permission
-to run, CTFs, and lab targets you own. The governed door and per-command approval exist
-so a human stays accountable for every action. Don't point it at anything you aren't
-allowed to test.
+```bash
+python3 live/broker/bs2_cli_broker.py
+python3 live/broker/bs2_gate.py
+```
 
-MIT-licensed. Copyright (c) 2026 Ben Olenick.
+Approval is mandatory regardless of the old `BS2_REQUIRE_HITL` toggle. An optional
+policy servicer requires an explicit operator-reviewed exact-command hash list;
+it no longer approves arbitrary commands by IP heuristics.
+
+## A bounded controlled check
+
+Only run against a service you are authorized to test. Provision two distinct test
+accounts. Set `BS2_OWNER_TOKEN` and `BS2_OTHER_TOKEN` privately (do not commit them).
+The identity endpoint must return `{"principal_id":"alice"}` / `"bob"`; the private
+resource must expose `id` and `owner_id`. Other application schemas need an explicit
+verifier adapter, not a guessed conclusion.
+
+```bash
+python3 scripts/bs2-doctor --require-hitl
+bs2 --run-dir "$BS2_RUN_DIR" check-read \
+  --base http://198.51.100.10 --route /private/1 --identity-route /whoami \
+  --owner alice --other bob --resource-id 1 \
+  --private-contract "This resource is private to its owner" \
+  --generation deployment-1 --session-epoch accounts-1
+
+bs2 --run-dir "$BS2_RUN_DIR" context
+bs2-ui --run-dir "$BS2_RUN_DIR"
+```
+
+Open `http://127.0.0.1:8130`. Approvals stay in the terminal; the panel is read-only.
+Keep the same run directory to resume. Update generation/session identifiers when
+the deployment or account state changes. An unchanged proven-negative check is
+suppressed without target contact. Unknown outcomes remain inconclusive.
+
+## Test
+
+```bash
+python3 -m pytest -q tests
+python3 -m playwright install chromium
+python3 tools/release_check.py --opus --browser --out /tmp/bs2-validation
+```
+
+The canary lets Opus select exactly two controlled checks against a disposable
+loopback fixture: ten HTTP requests total, then one judgment. No specialists,
+real targets or indefinite campaign. Omit `--opus` for a deterministic smoke.
+
+The source tree retains Ariadne, recipe catalogs, map/manager code and historical
+experiment integrations. Their presence does not mean every legacy entry point is
+supported or sandboxed in 0.2. The external Battlestation capability engine is not
+bundled and its tests skip unless that dependency is explicitly supplied.
+
+[Architecture history](docs/ARCHITECTURE.md) · [Cairn](docs/CAIRN.md) · [Release contract](docs/RELEASE-0.2.md)

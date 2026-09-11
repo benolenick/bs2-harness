@@ -21,23 +21,29 @@ NUC = os.environ.get("NUCLEI", "nuclei")
 
 def _sh(cmd, timeout=60):
     try:
-        p = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
-        return (p.stdout or "") + (p.stderr or "")
-    except Exception as e:
-        return f"__err__ {e}"
+        from . import target_exec
+    except ImportError:
+        import target_exec
+    out = target_exec.run(cmd, target=os.environ.get("BS2_TARGET"), timeout=timeout)
+    return "__err__ " + out if out.startswith("[target-exec") else out
 
 def _get(target, host, path="/", timeout=6):
     """Raw HTTP GET with a vhost Host header. Returns (status, headers_str, body)."""
     url = target.rstrip("/") + path
-    req = Request(url, headers={"Host": host} if host else {})
+    # Vhost routing is deliberately unsupported until an explicit origin binding
+    # is implemented. Never bypass the governed adapter with urllib.
+    if host and host != __import__("urllib.parse", fromlist=["urlsplit"]).urlsplit(target).hostname:
+        return 0, "", ""
     try:
-        with urlopen(req, timeout=timeout) as r:
-            body = r.read(20000).decode("latin-1", "replace")
-            hdrs = "\n".join(f"{k}: {v}" for k, v in r.headers.items())
-            return r.status, hdrs, body
-    except URLError as e:
-        code = getattr(e, "code", 0) or 0
-        return code, "", ""
+        try:
+            from . import target_exec
+            from .governed_runner import parse_response
+        except ImportError:
+            import target_exec
+            from governed_runner import parse_response
+        out = target_exec.run(shlex.join(["curl", "-sS", "-i", url]), target=target, timeout=timeout)
+        result = parse_response(out)
+        return result["status"], "\n".join(result["headers"]), result["body"]
     except Exception:
         return 0, "", ""
 

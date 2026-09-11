@@ -19,13 +19,10 @@ try:
     import target_exec as _TX
     def _sh(cmd, target):
         return _TX.run(cmd, target=target, action_class="web.exploit", timeout=25)
-except Exception:                                   # fallback: plain local exec
-    import subprocess
+except ImportError:
+    from . import target_exec as _TX
     def _sh(cmd, target):
-        try:
-            return subprocess.run(["bash","-lc",cmd], capture_output=True, text=True, timeout=25).stdout
-        except Exception as e:
-            return f"[exec-err {e}]"
+        return _TX.run(cmd, target=target, action_class="web.exploit", timeout=25)
 
 _PASSWD = re.compile(r"root:x:0:0:")
 _HREF   = re.compile(r"""(?:href|action|src)=['"]([^'"#]*\?[^'"#]+)['"]""", re.I)

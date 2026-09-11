@@ -75,7 +75,8 @@ def call_manager(prompt: str, model: str = "opus", timeout: float = 200.0) -> st
     """One-shot content-blind Opus brain via headless claude. Prose/action only, no tools.
     Mirrors battlestation-v2/manager_runner.py::call_opus."""
     try:
-        proc = subprocess.run(["claude", "-p", "--model", model],
+        proc = subprocess.run(["claude", "-p", "--model", model, "--tools", "", "--strict-mcp-config",
+                               "--setting-sources", "", "--settings", '{"disableAllHooks":true}', "--no-session-persistence"],
                               input=MANAGER_SYS + "\n\n" + prompt,
                               capture_output=True, text=True, timeout=timeout)
     except Exception as e:
@@ -170,8 +171,12 @@ def run_manager_lane(cls, endpoints, rows, tokens, emails, ariadne_goals, memori
     nudged = False
     for _ in range(step_cap):
         prompt = build_prompt(cls, endpoints, rows, tokens, emails, ariadne_goals, memoria_hint, transcript)
+        from bs2.session import manager_context
+        prompt += "\n\n" + manager_context([cls, *endpoints])
         raw = call_manager(prompt, model=model)
         verb, arg = parse_action(raw)
+        from bs2.session import record_manager_action
+        record_manager_action(verb, arg)
         if verb is None:
             if not nudged:      # one gentle nudge, then stop -- do not loop on junk
                 nudged = True
@@ -189,11 +194,10 @@ def run_manager_lane(cls, endpoints, rows, tokens, emails, ariadne_goals, memori
             conf = (kv.get("confidence") or "candidate").lower()
             ep = kv.get("endpoint", "?")
             note(f"{cls}: manager FINDING endpoint={ep} confidence={conf} note={kv.get('note','')[:100]}")
-            if conf == "verified":
-                facts.append(f"idor={ep}"); verified = True
-            else:
-                facts.append(f"idor_candidate={ep}")
-            transcript.append((f"FINDING {ep} ({conf})", "recorded"))
+            # A model's confidence and an OWNERDIFF text marker are not proof.
+            # Confirmed findings come only from bs2.verification receipt controls.
+            facts.append(f"idor_candidate={ep}")
+            transcript.append((f"FINDING {ep} (candidate)", "Requires controlled private-resource verification"))
             continue
 
         # ---- the two "fire" verbs: execute the manager's authored command, return a marker ----

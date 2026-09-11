@@ -38,16 +38,16 @@ def test_require_hitl_blocks_when_partially_wired(monkeypatch):
     # token still missing -> still fail closed
     out = TE.run("echo nope", target="127.0.0.1", action_class="web.recon")
     assert out.startswith("[target-exec BLOCKED:")
-    assert "BS2_GOVERNANCE_BROKER_TOKEN" in out
+    assert "runtime policy unavailable" in out  # policy validation precedes broker contact
 
 
-def test_require_hitl_off_by_default(monkeypatch):
+def test_require_hitl_required_even_if_legacy_toggle_disabled(monkeypatch):
     _clear(monkeypatch)
     # unset => legacy behaviour, the gate is transparent
-    assert TE._require_hitl_gate() is None
+    assert TE._require_hitl_gate() is not None
     for falsey in ("0", "false", "no", "off", ""):
         monkeypatch.setenv("BS2_REQUIRE_HITL", falsey)
-        assert TE._require_hitl_gate() is None
+        assert TE._require_hitl_gate() is not None
 
 
 def test_require_hitl_passes_gate_when_fully_wired(monkeypatch):

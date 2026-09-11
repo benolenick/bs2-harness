@@ -23,7 +23,7 @@ import time
 try:
     import target_exec as TEXEC
 except ImportError:                      # live/ imported as a package
-    from .. import target_exec as TEXEC
+    from . import target_exec as TEXEC
 
 STATUS_RE = re.compile(r"__GB_STATUS__:(\d{3})")
 TIME_RE = re.compile(r"__GB_TIME__:([\d.]+)")
@@ -42,7 +42,7 @@ def compile_curl(spec, timeout=30):
     route = spec.get("route_template") or "/"
     for k, v in (spec.get("path_binding") or {}).items():
         route = route.replace("{" + str(k) + "}", str(v))
-    parts = ["curl", "-sk", "--max-time", str(int(timeout)), "-X", method,
+    parts = ["curl", "-sS", "--max-time", str(int(timeout)), "-X", method,
              "-i",   # response headers + body; parsed back into names below
              "-w", "\\n__GB_STATUS__:%{http_code} __GB_TIME__:%{time_total}"]
     jar = ((spec.get("session_ref") or {}).get("cookies") or "").strip()
@@ -64,9 +64,11 @@ def parse_response(out, spec=None):
     if out.startswith("["):
         return {"status": 0, "headers": {}, "schema_keys": [], "body": "", "ms": 0.0,
                 "error": out[:200]}
-    m = STATUS_RE.search(out)
+    matches = list(STATUS_RE.finditer(out))
+    m = matches[-1] if matches else None
     status = int(m.group(1)) if m else 0
-    tm = TIME_RE.search(out)
+    matches = list(TIME_RE.finditer(out))
+    tm = matches[-1] if matches else None
     ms = round(float(tm.group(1)) * 1000, 1) if tm else 0.0
     header_names = {}
     for line in out.splitlines():

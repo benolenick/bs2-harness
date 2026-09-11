@@ -9,7 +9,7 @@ Speed = no agent between actions. Opus "cortex" wakes only when the 1.7b says `w
 frontier stalls. Content-blind: lanes emit signals/metadata, never raw payloads to the operator.
 """
 import asyncio, argparse, json, os, sys, time, re, secrets, shlex
-sys.path.insert(0, "/opt/bs2/catalog")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "catalog"))
 import loader
 
 # ---- param provider: fills recipe invocation templates with concrete values ----
@@ -50,11 +50,13 @@ async def fire_lane(recipe, params, sem, rate_delay, timeout, dry):
         await asyncio.sleep(rate_delay)
         t0 = time.time()
         try:
-            proc = await asyncio.create_subprocess_shell(
-                cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            lane["result"] = out.decode(errors="replace")[:4000]
-            lane["rc"] = proc.returncode
+            try:
+                from . import target_exec
+            except ImportError:
+                import target_exec
+            out = await asyncio.to_thread(target_exec.run, cmd, params.get("host"), timeout=timeout)
+            lane["result"] = out[:4000]
+            lane["rc"] = -1 if out.startswith("[target-exec") else 0
         except asyncio.TimeoutError:
             lane["result"] = "(timeout)"; lane["rc"] = -1
         except Exception as e:

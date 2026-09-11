@@ -386,9 +386,8 @@ def call_manager(prompt, model="deepseek-v4-pro", timeout=260.0):
             return f"DONE manager-brain-error: {type(e).__name__}: {str(e)[:160]}"
     try:
         proc = subprocess.run(["claude", "-p", "--model", model,
-                               "--disallowedTools", "Bash", "Edit", "Write", "Read",
-                               "NotebookEdit", "Glob", "Grep", "Task",
-                               "WebSearch", "WebFetch"],
+                               "--tools", "", "--strict-mcp-config", "--setting-sources", "",
+                               "--settings", '{"disableAllHooks":true}', "--no-session-persistence"],
                               input=MANAGER_SYS + "\n\n" + prompt,
                               capture_output=True, text=True, timeout=timeout)
     except Exception as e:
@@ -1077,7 +1076,8 @@ def main():
         sys.exit(1)
     run_ts = int(time.time())
     run_dir = a.run_dir or f"/tmp/claude-1000/-home-om/htb-{_run_identity(target, charter_doc, run_ts)}"
-    os.makedirs(run_dir, exist_ok=True)
+    os.makedirs(run_dir, mode=0o700, exist_ok=True)
+    os.environ.setdefault("BS2_RUN_DIR", run_dir)
     # Lenz is a translation layer, not the harness event format. It exists for the Codex
     # consumers; the manager loop runs with it OFF by default (GB_LENZ=1 re-enables it).
     lenz = (SafeLenzStream.mirror(steps=a.steps) if os.environ.get("GB_LENZ", "0") == "1"
@@ -1185,6 +1185,8 @@ def main():
         toks = observed_tokens(facts, telem_history)
         routes, recon_next = ariadne_routes(facts, target, cart=C)
         mem = memoria_hint(toks)
+        from bs2.session import manager_context
+        mem = (mem or "") + "\n\n" + manager_context([str(t) for t in toks])
         frontier = C.frontier(top=8)
         open_hyps = C.open_hypotheses(8)
         coverage = C.coverage_report()
@@ -1212,6 +1214,8 @@ def main():
             time.sleep(5)
             raw = call_manager(prompt, model=a.model)
         verb, arg = parse_action(raw)
+        from bs2.session import record_manager_action
+        record_manager_action(verb, arg)
         why = parse_rationale(raw)
         emit("manager", step=step, verb=verb or "INVALID", routes=len(routes), memoria=bool(mem),
              why=(why or "(none given)"), action=(arg if arg else raw[:400]))

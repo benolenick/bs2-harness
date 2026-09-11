@@ -68,6 +68,7 @@ def yes(q, default=False):
 
 
 def _http_banner(host, port):
+    return ""  # pre-policy target contact is not permitted in 0.2
     scheme = "https" if port in (443, 8443, 5986) else "http"
     try:
         req = urllib.request.Request(f"{scheme}://{host}:{port}/", headers={"User-Agent": "bs2-roe/1"})
@@ -87,6 +88,8 @@ def gentle_scan(host, extra_ports=()):
     """READ-ONLY: TCP connect on a curated port list (+ any operator-declared ports) plus one
     HTTP GET per web port. Time-boxed. An open port that isn't in the known map but answers HTTP
     is treated as a web service, so a webapp on any port (3000, 5000, 8109, ...) is found."""
+    print("Pre-policy TCP scanning is disabled in 0.2. Create explicit host/port scope first; use the governed HTTP runtime afterwards.")
+    return {}
     targets = dict(PORTS)
     for p in extra_ports:
         targets.setdefault(int(p), (f"port-{p}", "unknown"))
@@ -165,7 +168,7 @@ def main():
 
     target = ask("Primary target host or IP (the box you're authorized to test)")
     thost = re.sub(r"^\w+://", "", target).split("/")[0].split(":")[0] if target else ""
-    ports = ask("Which port(s) are in scope? comma-separated, blank = all", "")
+    ports = ask("Which port(s) are in scope? explicit comma-separated ports required", "80,443")
     extra_hosts = ask("Any other in-scope hosts/CIDRs? comma-separated, blank = none", "")
 
     is_loopback = bool(re.match(r"^(127\.0\.0\.1|localhost)$", thost))
@@ -246,6 +249,7 @@ def main():
     net = "loopback_only" if is_loopback else ("scope_only" if hosts else "deny")
     policy = {
         "network_mode": net, "allowed_hosts": hosts,
+        "allowed_ports": [int(p.strip()) for p in ports.split(",") if p.strip().isdigit()],
         "max_actions_per_host": 500, "budget_window_seconds": 3600,
         "command_approval_timeout_seconds": 300, "denylist_extra": denylist,
         "_roe": {"target": thost, "ports": ports, "touches_prod": prod, "touches_ad": ad,

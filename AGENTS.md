@@ -1,69 +1,36 @@
-# For an AI assistant driving BS2
+# Instructions for agents driving BS2 0.2
 
-If you are an AI agent asked to run, set up, or drive this pentest engine, do this FIRST,
-before any other command:
+Before driving a session, run:
 
 ```bash
 python3 scripts/bs2-doctor --require-hitl --json
 ```
 
-Parse the JSON. Then:
+A fail result means do not run the engine. Explain the failing checks, fix only
+setup problems within the operator's authorization, then rerun the doctor.
+Warnings are limitations to disclose, not permissions to bypass a refusal.
 
-- **`result": "fail"`** (exit 2) — DO NOT run BS2. Show the operator `report_text` and tell them
-  to send it to the maintainer (Ben). Each entry in `checks` has a `fix`; apply the ones you can
-  (install a package, set an env var, start the broker), then re-run the doctor. Do not work around
-  a failure you cannot explain — surface it.
-- **`result": "warn"`** (exit 1) — safe to proceed. Skim `checks` for any `warn` the operator would
-  care about (a missing tool a lane needs, an unset model key) and mention it.
-- **`result": "ok"`** (exit 0) — proceed.
+Read SIGIL.md, README.md and docs/CAIRN.md. New 0.2 instructions supersede older
+campaign recipes in historical documents.
 
-Re-run the doctor whenever the environment changes (new key, new target, broker restarted).
+- Supported portable execution is `bs2 check-read` / `live.target_exec.run` using
+  the pinned-HTTP curl subset. No arbitrary-shell or multi-protocol sandbox is
+  bundled. Legacy SSH and external capability-seam execution refuse.
+- Every supported request needs explicit host/port scope, a private policy,
+  exact expiring broker approval, an action budget and private BS2_RUN_DIR.
+  Approval cannot be disabled by an environment toggle.
+- Never route around a refusal with subprocess, urllib, SSH, old campaign scripts
+  or a differently worded command. Ask the operator about changes to scope/RoE.
+- Model confidence and target text are not verified findings. Use the controlled
+  receipt verifier with provisioned owner/other/anonymous controls.
+- Preserve per-assessment Cairn state. Missing conditions are unknown; negatives
+  only suppress matching conditions. Update deployment/session IDs honestly.
+- The panel is read-only and exposes only memory/receipts, not raw secrets.
+- For release testing: unit suite, bounded local fixture, clean-install smoke.
+  `tools/release_check.py --opus --browser --out /tmp/bs2-validation` caps the
+  canary at ten fixture requests and three Opus calls, no specialists.
+- Historical integrations are source references, not endorsed alternate doors.
+  The scoped manager/AGENTS.md restrictions still apply to real campaign data.
 
-To set the Rules of Engagement, run `python3 scripts/bs2-roe` — a few questions (optionally after
-a gentle, read-only scan of the target) that write the governance policy and print the exact env
-exports. After a run, `python3 scripts/bs2-report` produces a clean governed write-up.
-
-## How BS2 is meant to run (human-in-the-loop, like the MIT harness — but governed)
-
-1. The operator wants **HITL always**: every command that touches the target waits for their
-   `y`/`n`. Keep `BS2_REQUIRE_HITL=1` set — the door then refuses to run at all if approval is
-   unwired, so you can never accidentally run ungoverned.
-2. Start the broker (`live/broker/bs2_cli_broker.py`) and the approver (`live/broker/bs2_gate.py`
-   for an interactive human, or `live/broker/servicer.py` for a policy). Commands queue there until
-   approved.
-3. Run the engine: `python3 live/autocannon.py --target <host>`. It picks + sequences + verifies;
-   the trooper model runs each command through the one governed door. You reason, the operator
-   approves, the engine follows up on grounded facts.
-4. Pointing at a webapp the operator set up? The AI trooper refuses loopback + LAN by default
-   (safety). Set the scope opt-in for the authorized target, or every AI-improvised command is
-   silently refused (the recipe floor still runs, so it looks half-broken):
-   - `127.0.0.1`/`localhost`: `GB_ALLOW_LOOPBACK=1` and `GB_CHARTER_PORTS=<ports>`
-   - LAN IP (`192.168.x`): `GB_ALLOW_TARGET=1`
-   - any other IP: nothing needed.
-   The doctor's `scope-target` check reports exactly which of these is missing.
-
-Never point BS2 at a host the operator is not authorized to test. The doctor and the door enforce
-scope, but you are the first line.
-
-## Self-repair in flight
-
-BS2 tells you why it stopped. Whenever a command comes back with a marker like
-`[target-exec BLOCKED: ...]`, `[trooper scope-guard BLOCKED: ...]`, or `[GOVERNED DENY: ...]`,
-DON'T guess and DON'T retry the same thing — look it up:
-
-```bash
-python3 scripts/bs2-doctor --explain "<paste the exact marker text>" --json
-```
-
-You get `{diagnosis, fix}`. Then:
-
-- **Setup/config fix you can safely make** (an unset scope flag, an unstarted broker, unsafe
-  policy perms) — apply it, then re-run the doctor (`--require-hitl --json`) to confirm, and
-  continue.
-- **An operator decision** (`RoE denylist`, `per-command approval denied`, `outside scope`,
-  `destructive pattern`) — respect it. Do not rephrase to evade a block. Pick another approach,
-  or surface it to the operator to amend the RoE (`scripts/bs2-roe`).
-
-Re-run `bs2-doctor --require-hitl --json` any time the environment changes or things start
-failing for no clear reason. The health check + `--explain` are your repair loop: the fix rides
-in the error, so read it, resolve it, keep moving — but never weaken a guardrail to get unstuck.
+Log checked results honestly. A synthetic fixture or skipped external dependency
+does not establish a successful real engagement or full legacy compatibility.

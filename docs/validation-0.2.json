@@ -1,0 +1,114 @@
+{
+  "version": "0.2.0",
+  "base": "2c1aefbd1aca4aad14f7afe7f08cfce2099527ab",
+  "tests": {
+    "passed": 254,
+    "skipped": 1,
+    "skip_reason": "Optional external Battlestation engine not installed"
+  },
+  "opus_canary": {
+    "scope": "disposable loopback fixture only",
+    "driver": "opus",
+    "http_requests": 10,
+    "approvals": {
+      "count": 10,
+      "actor": "fixture-policy",
+      "not_human_clicks": true
+    },
+    "turns": [
+      {
+        "choice": {
+          "action": "check_guarded",
+          "why": "Release test should validate the governance/guard seam on the authorized disposable fixture; guarded read exercises the owner/other/anonymous access distinction that matters for the gate."
+        },
+        "verdict": "negative",
+        "served_context_hash": "e8345fa23fc69dcc77c3322d539aa3582b172a882f998f1cd992a947e954d2c0"
+      },
+      {
+        "choice": {
+          "action": "check_private",
+          "why": "Only offered check; validates two identities and compares owner/other/anonymous on the authorized disposable fixture, exercising the private-contract access distinction distinct from the prior guarded check."
+        },
+        "verdict": "confirmed",
+        "served_context_hash": "1812b7d2b7990c057960d4bf1146ac7aaa50d153e035cfe393bdb3a40f17a453"
+      }
+    ],
+    "browser": {
+      "rendered": true,
+      "exact_context": true,
+      "source_link": true,
+      "console_errors": []
+    },
+    "benchmark": {
+      "kind": "deterministic synthetic restart contract",
+      "facts_available": 3,
+      "capsules_only": {
+        "retained_facts": 1,
+        "redundant_checks": 1,
+        "unsupported_conclusions": 0
+      },
+      "capsules_plus_cairn": {
+        "retained_facts": 2,
+        "redundant_checks": 0,
+        "unsupported_conclusions": 0
+      },
+      "changed_generation_reopens": true,
+      "real_process_restart": true,
+      "caveat": "Frozen task facts and deterministic consumer; not evidence of improved real-world attack success or model performance"
+    },
+    "opus_judgment": {
+      "pass": true,
+      "reason": "All required measured thresholds met: 10 fixture HTTP requests, exactly one confirmed check (check_private, seq 26) and one controlled negative (check_guarded, seq 13), 10 approvals with matching action_keys, and a real process restart where changed_generation_reopens and capsules+cairn retained 2/3 facts with 0 redundant checks and 0 unsupported conclusions.",
+      "limits": [
+        "Scope is a disposable loopback fixture (fixture-v1, fixture-session-1) only — not a real engagement; results do not claim real-world attack success or model performance",
+        "Benchmark is a deterministic synthetic restart contract over 3 frozen facts; capsules+cairn beat capsules-only (2 vs 1 retained, 0 vs 1 redundant) but this is not evidence of improved real-world performance",
+        "Approvals (count=10) came from actor 'fixture-policy' with not_human_clicks=true — these are automated fixture approvals, NOT human HITL clicks; live HITL was not exercised",
+        "Doctor is WARN not OK: BS2_REQUIRE_HITL is set but no bs2-gate/servicer approver is running, so real commands would queue and time out (fail closed) — the HITL door is unverified end-to-end here",
+        "Containment is pinned HTTP only (no shell, proxy, redirect, cookie-file, SSH, or arbitrary network tools); no OS-isolated sandbox for arbitrary tools is bundled",
+        "Optional tooling/executor not provisioned: gobuster/enum4linux/nuclei missing and TROOPER_BASE/MODEL/KEY unset, so the AI executor could not run — only the governed pinned-HTTP seam was tested"
+      ]
+    }
+  },
+  "final_deterministic_smoke": {
+    "scope": "disposable loopback fixture only",
+    "driver": "deterministic",
+    "http_requests": 10,
+    "approvals": {
+      "count": 10,
+      "actor": "fixture-policy",
+      "not_human_clicks": true
+    },
+    "browser": {
+      "rendered": true,
+      "exact_context": true,
+      "source_link": true,
+      "console_errors": []
+    },
+    "benchmark": {
+      "kind": "deterministic synthetic restart contract",
+      "facts_available": 3,
+      "capsules_only": {
+        "retained_facts": 1,
+        "redundant_checks": 1,
+        "unsupported_conclusions": 0
+      },
+      "capsules_plus_cairn": {
+        "retained_facts": 3,
+        "redundant_checks": 0,
+        "unsupported_conclusions": 0
+      },
+      "changed_generation_reopens": true,
+      "real_process_restart": true,
+      "caveat": "Frozen task facts and deterministic consumer; not evidence of improved real-world attack success or model performance"
+    }
+  },
+  "clean_install": {
+    "extracted_source_suite_passed": 254,
+    "extracted_source_suite_skipped": 1,
+    "wheel": true,
+    "isolated_python": true,
+    "cairn_import": true,
+    "panel_assets": true
+  },
+  "note": "The first benchmark scorer looked for an untruncated display label and undercounted retention as 2/3. Corrected scorer and regression test measure 3/3; the original Opus judgment is preserved, not rewritten."
+}

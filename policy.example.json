@@ -1,6 +1,7 @@
 {
   "network_mode": "scope_only",
   "allowed_hosts": ["198.51.100.0/24", "10.10.10.0/24"],
+  "allowed_ports": [80, 443],
   "max_actions_per_host": 500,
   "budget_window_seconds": 3600,
   "command_approval_timeout_seconds": 300

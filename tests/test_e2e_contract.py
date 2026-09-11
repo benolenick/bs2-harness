@@ -26,8 +26,9 @@ import pytest
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE / "live"))
 sys.path.insert(0, str(HERE / "manager"))
-BS2 = os.environ.get("BS2_ENGINE_DIR", "/mnt/sata/htb-bakeoff/bs2-governed-wt")
-sys.path.insert(0, BS2)
+BS2 = os.environ.get("BS2_ENGINE_DIR", "")
+if BS2:
+    sys.path.insert(0, BS2)
 
 # The capability-seam engine (`battlestation`) is NOT bundled in this repo; the HITL path is
 # independent of it. Skip this seam contract suite cleanly when the package isn't importable,

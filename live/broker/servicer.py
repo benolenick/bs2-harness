@@ -1,35 +1,34 @@
 #!/usr/bin/env python3
-"""Operator approval servicer — codifies the approver policy for an autonomous run:
-auto-approve in-scope, non-destructive box commands (already gate-filtered); HOLD any
-command naming a non-target IP or matching an exfil pattern for manual review."""
-import os, json, time, re, sys
-STATE=os.path.expanduser("~/.local/state/bs2-broker")
-PEND=os.path.join(STATE,"pending"); DEC=os.path.join(STATE,"decisions")
-os.makedirs(PEND, exist_ok=True); os.makedirs(DEC, exist_ok=True)  # tolerate starting before the broker
-try: os.chmod(STATE, 0o700)
-except OSError: pass
-TARGET="198.51.100.10"
-IP=re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b")
-# exfil = pushing data OUT to a non-target host; a /dev/tcp or nc TO the target is a read/banner-grab
-EXFIL=re.compile(r"(scp\s|curl\s+-T\b|--upload-file|wget\s+--post|\bnc\s+-[^ ]*e)", re.I)
-def log(m): print(f"[{time.strftime('%H:%M:%S')}] {m}", flush=True)
-seen=set()
-log("servicer up")
-end=time.time()+2400
-while time.time()<end:
-    for fn in sorted(os.listdir(PEND)):
-        if not fn.endswith(".json"): continue
-        rid=fn[:-5]
-        if rid in seen: continue
-        try: d=json.load(open(os.path.join(PEND,fn)))
-        except Exception: continue
-        seen.add(rid); cmd=d.get("command","")
-        foreign=[x for x in set(IP.findall(cmd))-{TARGET} if not x.startswith(("0.","255."))]
-        if foreign or EXFIL.search(cmd):
-            log(f"HOLD {rid} :: {cmd[:160]}  foreign={foreign} exfil={bool(EXFIL.search(cmd))}")
-            continue
-        json.dump({"allow":True,"reason":"operator: in-scope authorized","ts":time.time()},
-                  open(os.path.join(DEC,rid+".json"),"w"))
-        log(f"OK   {rid} :: {cmd[:170]}")
-    time.sleep(1.5)
-log("servicer window closed")
+"""Finite policy approver. BS2_APPROVED_COMMAND_HASHES must name an operator-reviewed
+JSON list of SHA256 hashes of exact command strings. This is NOT a human click."""
+import hashlib, json, os, sys, time
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from bs2.approval import write_decision
+
+
+def main():
+    allow_file = os.environ.get("BS2_APPROVED_COMMAND_HASHES")
+    if not allow_file:
+        raise SystemExit("Set BS2_APPROVED_COMMAND_HASHES to an exact-command hash list; otherwise use bs2_gate.py")
+    hashes = set(json.loads(Path(allow_file).read_text()))
+    state = Path(os.environ.get("BS2_BROKER_STATE", str(Path.home() / ".local/state/bs2-broker")))
+    deadline = time.monotonic() + min(2400, int(os.environ.get("BS2_SERVICER_SECONDS", "300")))
+    seen = set()
+    while time.monotonic() < deadline:
+        for path in sorted((state / "pending").glob("*.json")):
+            if path.stem in seen:
+                continue
+            try:
+                row = json.loads(path.read_text())
+                if hashlib.sha256(row["command"].encode()).hexdigest() in hashes:
+                    write_decision(state, path.stem, True, "exact command allowlist", actor="operator-policy")
+                    print(f"policy approved {path.stem}", flush=True)
+                    seen.add(path.stem)
+            except (ValueError, OSError, KeyError):
+                continue
+        time.sleep(0.4)
+
+
+if __name__ == "__main__":
+    main()

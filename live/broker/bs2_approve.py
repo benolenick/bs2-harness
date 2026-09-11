@@ -7,6 +7,9 @@
   bs2-approve deny  <id> [reason]
 """
 import json, os, sys, time
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from bs2.approval import write_decision
 STATE = os.environ.get("BS2_BROKER_STATE", os.path.expanduser("~/.local/state/bs2-broker"))
 PENDING = os.path.join(STATE, "pending"); DECIDED = os.path.join(STATE, "decisions")
 
@@ -19,10 +22,7 @@ def _pend():
     return sorted(out, key=lambda r: r.get("ts", 0))
 
 def _decide(rid, allow, reason=""):
-    os.makedirs(DECIDED, exist_ok=True)
-    p = os.path.join(DECIDED, rid + ".json")
-    with open(p, "w") as f: json.dump({"allow": allow, "reason": reason, "ts": time.time()}, f)
-    os.chmod(p, 0o600)
+    write_decision(STATE, rid, allow, reason)
     print(("ALLOWED " if allow else "DENIED  ") + rid + ((" — " + reason) if reason else ""))
 
 def main():

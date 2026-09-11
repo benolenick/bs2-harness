@@ -15,3 +15,7 @@ runs/
 *.raw
 *.log
 bs2-doctor-report.txt
+build/
+dist/
+*.egg-info/
+.venv/
