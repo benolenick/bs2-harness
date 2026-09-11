@@ -282,9 +282,7 @@ def check_policy():
     path = os.environ.get("BS2_GOVERNANCE_POLICY", "").strip()
     if not path:
         tier = FAIL if HITL else WARN
-        extra = " — HITL-always REQUIRES a policy; without it the door runs UNGOVERNED" if HITL else \
-                " — the runtime scope floor and per-command broker are OFF (legacy mode: " \
-                "destructive-guard + witnessed audit only)"
+        extra = " — the door refuses target contact until a policy is configured"
         check(tier, "policy", "BS2_GOVERNANCE_POLICY not set" + extra,
               "cp policy.example.json ~/.config/bs2/policy.json ; chmod 600 it ; "
               "export BS2_GOVERNANCE_POLICY=~/.config/bs2/policy.json")
@@ -378,7 +376,7 @@ def check_hitl():
         return
     door_on = True  # execution requires approval irrespective of legacy env toggle
     if door_on:
-        check(OK, "hitl-enforced", "BS2_REQUIRE_HITL set — the door fails closed unless "
+        check(OK, "hitl-enforced", "approval is mandatory regardless of BS2_REQUIRE_HITL — the door fails closed unless "
               "per-command approval is fully wired")
     else:
         check(FAIL, "hitl-enforced", "running HITL-always checks, but BS2_REQUIRE_HITL is not "

@@ -1,7 +1,7 @@
 # BS2 harness
 
 PURPOSE: operator-governed assessment backend with durable Cairn memory.
-VERSION: 0.2.0. Source of truth: benolenick/bs2-harness, master.
+VERSION: 0.2.1. Source of truth: benolenick/bs2-harness, master.
 PORTS: approval broker 8129; read-only operator panel 8130; optional Ariadne 8112.
 STATE: supported portable execution is pinned HTTP; arbitrary shell/network
 tools, SSH dispatch, cookie files and the external capability seam are refused.

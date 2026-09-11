@@ -62,7 +62,9 @@ def test_salvage_no_false_app_for_generic_titles():
 def test_salvage_keeps_existing_signal_extraction():
     facts = _salvage_facts([CRAPI_ROOT, "$ ssh 198.51.100.10\ngetuid: root\n"], "198.51.100.10")
     assert "app=crapi" in facts
-    assert "rce_as=root" in facts
+    # HTTP-only 0.2.1 cannot authenticate an apparent SSH/getuid transcript.
+    # Discovery hints survive; unsupported host-execution claims do not.
+    assert "rce_as=root" not in facts
 
 
 def test_diagnose_ignores_engine_searchsploit_chunk():

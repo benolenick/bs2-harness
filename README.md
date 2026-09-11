@@ -7,10 +7,14 @@ evidence decide what actually happened.
 **Breaking safety change:** the supported portable backend is pinned HTTP, not a
 general shell or multi-protocol scanner. Unsupported shell commands, SSH/seam
 dispatch, proxies, redirects and cookie files refuse rather than run uncontained.
-See [release notes](docs/RELEASE-0.2.md) before migrating an older campaign.
+See the [0.2 runtime contract](docs/RELEASE-0.2.md) before migrating an older
+campaign. Latest patch: [0.2.1 release notes](docs/RELEASE-0.2.1.md).
 
 ## What's new
 
+- 0.2.1 hardens the production Claude trooper: independent tools and hooks are
+  disabled, prompts use stdin, inconclusive requests cannot complete checks, and
+  text-only shell claims are rejected in both verdict and salvage paths.
 - Exact, expiring approvals bind the command, HTTP execution plan, destination,
   policy and assessment context. Scope and policy are rechecked before dispatch.
 - Your existing **Cairn** implementation now folds BS2 receipts automatically and
@@ -96,6 +100,20 @@ python3 tools/release_check.py --opus --browser --out /tmp/bs2-validation
 The canary lets Opus select exactly two controlled checks against a disposable
 loopback fixture: ten HTTP requests total, then one judgment. No specialists,
 real targets or indefinite campaign. Omit `--opus` for a deterministic smoke.
+
+To additionally test Opus as both driver and trooper, through the production
+tool-disabled Claude launcher (requires a signed-in `claude` CLI):
+
+```bash
+python3 tools/dual_opus_check.py --out /tmp/bs2-dual-opus
+```
+
+This separate test caps at eight model calls and seven loopback HTTP requests.
+It checks controlled verification, Cairn across a fresh process, repeat
+suppression and redirect refusal. A test-only route/principal allowlist further
+restricts the fixture; it is not a general campaign or an OS sandbox test.
+Outside the fixture, select this launcher with `TROOPER_BASE=claude-cli` and
+`TROOPER_MODEL=opus`; approval, policy and durable-storage requirements still apply.
 
 The source tree retains Ariadne, recipe catalogs, map/manager code and historical
 experiment integrations. Their presence does not mean every legacy entry point is

@@ -29,6 +29,9 @@ campaign recipes in historical documents.
 - For release testing: unit suite, bounded local fixture, clean-install smoke.
   `tools/release_check.py --opus --browser --out /tmp/bs2-validation` caps the
   canary at ten fixture requests and three Opus calls, no specialists.
+  `tools/dual_opus_check.py --out /tmp/bs2-dual-opus` separately exercises the
+  production Claude launcher with Opus driver/trooper, capped at eight model
+  calls and seven fixture requests with an extra test-only route allowlist.
 - Historical integrations are source references, not endorsed alternate doors.
   The scoped manager/AGENTS.md restrictions still apply to real campaign data.
 

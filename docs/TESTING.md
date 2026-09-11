@@ -1,5 +1,10 @@
 # Testing BS2 — the gate, the canary, the A/B
 
+Historical test plan. Current release commands and limits are in the
+[README](../README.md#test) and [0.2.1 release notes](RELEASE-0.2.1.md).
+The old campaign recipes and external capability seam below are not supported
+execution alternatives. Current SIGIL/AGENTS instructions take precedence.
+
 ## 1. The unit/integration suite (run before EVERY change and EVERY commit)
 
 ```bash

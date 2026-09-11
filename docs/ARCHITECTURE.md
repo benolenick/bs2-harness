@@ -1,5 +1,10 @@
 # BS2 architecture + how to implement and fix it
 
+Historical design reference. For the supported 0.2 runtime, read
+[SIGIL](../SIGIL.md), [README](../README.md), and the
+[runtime contract](RELEASE-0.2.md) first. The campaign, shell and capability-seam
+paths described below are not supported execution alternatives in 0.2.
+
 Written for an agent that must understand, extend, and repair this system without
 the original builder. Read this before touching code; the tests are the contract.
 

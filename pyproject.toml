@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bs2-harness"
-version = "0.2.0"
+version = "0.2.1"
 description = "Governed assessment runtime with Cairn persistent memory"
 requires-python = ">=3.10"
 dependencies = ["PyYAML>=6", "requests>=2.31", "cryptography>=41"]

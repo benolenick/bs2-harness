@@ -1,0 +1,81 @@
+{
+  "version": "0.2.1",
+  "date": "2026-09-11",
+  "base_commit": "ce7bfcff7b6cd6367daaf44e3a67af2af6d8750a",
+  "tested_code_tree_before_release_documentation": "545a87b4eb4340ea4cffc19b9e1ccc6b3991576c",
+  "scope": "Disposable loopback fixtures only; no real targets or running fleet deployments",
+  "regressions": {
+    "passed": 271,
+    "skipped": 1,
+    "seconds": 18.95,
+    "skip_reason": "Optional external Battlestation engine not installed",
+    "new_trooper_contract_cases": 17
+  },
+  "production_dual_opus": {
+    "pass": true,
+    "configured_driver_model": "opus",
+    "configured_trooper_model": "opus",
+    "stock_launcher_tested_live": true,
+    "trooper_launcher": "live.trooper._chat_claude",
+    "model_invocations": 8,
+    "model_invocation_cap": 8,
+    "roles": {"driver": 1, "trooper": 6, "resumed_driver": 1},
+    "summed_model_wall_seconds": 60.618,
+    "http_requests": 7,
+    "http_request_cap": 7,
+    "approvals": 7,
+    "approval_actor": "fixture-policy (not human clicks)",
+    "additional_test_guard": "Exact route/principal allowlist before production run_cmd",
+    "five_distinct_identity_and_resource_controls": true,
+    "independent_verdict": "negative",
+    "fresh_interpreter_memory_restart": true,
+    "resumed_driver_same_conditions": "skip",
+    "resumed_driver_changed_generation": "recheck",
+    "suppressed_repeat_requests": 0,
+    "redirect_response_status": 302,
+    "redirect_follow_refused_without_contact": true,
+    "forged_marker_response_status": 403,
+    "legacy_automatic_lookup_rejected": true,
+    "note": "Trooper calls record configured model, not provider model identity. The successful live canary preceded a narrow invalid-timeout-before-launch cleanup subsequently covered by four additional unit cases."
+  },
+  "browser_fixture": {
+    "driver": "deterministic",
+    "http_requests": 10,
+    "approvals": 10,
+    "approval_actor": "fixture-policy (not human clicks)",
+    "verdicts": ["confirmed", "negative"],
+    "rendered": true,
+    "exact_context": true,
+    "source_link": true,
+    "page_errors": []
+  },
+  "restart_benchmark": {
+    "kind": "deterministic synthetic state-retention contract",
+    "facts_available": 3,
+    "capsules_only": {"retained_facts": 1, "redundant_checks": 1, "unsupported_conclusions": 0},
+    "capsules_plus_cairn": {"retained_facts": 3, "redundant_checks": 0, "unsupported_conclusions": 0},
+    "changed_generation_reopens": true,
+    "real_process_restart": true,
+    "not_real_world_model_performance": true
+  },
+  "clean_install": {
+    "fresh_venv": true,
+    "wheel_with_declared_test_extras": true,
+    "isolated_python": true,
+    "runtime_and_trooper_imports": true,
+    "cairn_import": true,
+    "panel_assets": true,
+    "cli_startup": true,
+    "extracted_source_tests_passed": 271,
+    "extracted_source_tests_skipped": 1,
+    "extracted_source_test_seconds": 19.08,
+    "wheel_sha256": "025fbd2b6d3d43719396372d8509634126f875f61f7fe29ce14203777bf956a3"
+  },
+  "limitations": [
+    "Pinned HTTP containment is not an OS sandbox",
+    "No real engagement, arbitrary shell or multi-protocol canary",
+    "Interactive operator approvals not manually exercised",
+    "Legacy automatic lookup remains unsupported and was safely rejected",
+    "Panel tutoring is static; historical manager and recipe integrations remain partial"
+  ]
+}
